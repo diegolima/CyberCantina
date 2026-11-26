@@ -429,6 +429,11 @@ def update_campaign_world_settings(
                 if req.unlock_lore is not None
                 else existing.unlock_lore
             ),
+            auto_spawn_props_on_search_crit=(
+                req.auto_spawn_props_on_search_crit
+                if req.auto_spawn_props_on_search_crit is not None
+                else existing.auto_spawn_props_on_search_crit
+            ),
         )
         return repo.update_campaign_world_settings(
             campaign_id,

@@ -14,6 +14,7 @@ from app.schemas.world import (
     LocationContainer,
     LocationEdge,
     LocationNode,
+    LocationProp,
     LoreNode,
     WorldGlobalRules,
     WorldMediaItem,
@@ -220,6 +221,64 @@ class WorldsMixin:
             valid_turn_ids=valid_turn_ids,
         )
 
+    @staticmethod
+    def _row_to_location_prop(r: sqlite3.Row) -> LocationProp:
+        try:
+            flags = json.loads(r["flags_json"] or "[]")
+        except Exception:
+            flags = []
+        return LocationProp(
+            id=r["id"],
+            name=r["name"],
+            note=r["note"] or "",
+            flags=flags if isinstance(flags, list) else [],
+            lore_id=r["lore_id"] or None,
+            is_hidden=bool(r["is_hidden"]),
+            auto_spawned=False,
+        )
+
+    def _resolve_location_props_map(
+        self,
+        conn: sqlite3.Connection,
+        location_ids: list[str] | set[str],
+        campaign_id: str | None = None,
+    ) -> dict[str, list[LocationProp]]:
+        """Hydrate authored portable LocationProps per location_id."""
+        clean_ids = [sid for sid in location_ids if sid]
+        if not clean_ids:
+            return {}
+        placeholders = ",".join("?" for _ in clean_ids)
+        try:
+            if campaign_id:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM location_props
+                    WHERE location_id IN ({placeholders})
+                      AND (campaign_id IS NULL OR campaign_id = ?)
+                    ORDER BY sort_order ASC, rowid ASC
+                    """,
+                    [*clean_ids, campaign_id],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM location_props
+                    WHERE location_id IN ({placeholders})
+                      AND campaign_id IS NULL
+                    ORDER BY sort_order ASC, rowid ASC
+                    """,
+                    clean_ids,
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return {sid: [] for sid in clean_ids}
+
+        result: dict[str, list[LocationProp]] = {sid: [] for sid in clean_ids}
+        for r in rows:
+            lid = r["location_id"]
+            if lid in result:
+                result[lid].append(self._row_to_location_prop(r))
+        return result
+
     def create_world_from_draft(
         self,
         draft: WorldWizardDraft | WorldWizardCommitPayload,
@@ -383,6 +442,27 @@ class WorldsMixin:
                             embedding=pre_loc_vec,
                             conn=conn,
                         )
+                for p_idx, prop in enumerate(getattr(loc, "props", None) or []):
+                    prop_id = prop.id if prop.id and not prop.id.startswith("new_") else f"prop_{uuid.uuid4().hex[:10]}"
+                    conn.execute(
+                        """
+                        INSERT INTO location_props (
+                            id, world_id, location_id, campaign_id, name, note, flags_json, lore_id, is_hidden, sort_order
+                        )
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            prop_id,
+                            w_id,
+                            loc_id,
+                            prop.name,
+                            prop.note,
+                            json.dumps(list(prop.flags)),
+                            prop.lore_id,
+                            1 if prop.is_hidden else 0,
+                            p_idx,
+                        ),
+                    )
 
             occupied_from: dict[str, set[str]] = {}
             for edge in draft.edges:
@@ -736,8 +816,14 @@ class WorldsMixin:
                 campaign_id=None if base_only else campaign_id,
                 valid_turn_ids=None if base_only else valid_turn_ids,
             )
+            loc_props_map = self._resolve_location_props_map(
+                conn,
+                [loc.id for loc in locations],
+                campaign_id=None if base_only else campaign_id,
+            )
             for loc in locations:
                 loc.lore_nodes = loc_lore_map.get(loc.id, [])
+                loc.props = loc_props_map.get(loc.id, [])
 
             media_items = self._resolve_world_media_items(conn, world_id)
             media_by_id = {m.id: m for m in media_items}
@@ -866,6 +952,10 @@ class WorldsMixin:
                 )
                 conn.execute(
                     "DELETE FROM location_edges WHERE world_id = ? AND created_at_turn_id IS NULL",
+                    (target_world_id,),
+                )
+                conn.execute(
+                    "DELETE FROM location_props WHERE world_id = ? AND campaign_id IS NULL",
                     (target_world_id,),
                 )
                 conn.execute(
@@ -1208,10 +1298,50 @@ class WorldsMixin:
                     )
 
             # Insert base location-level lore nodes & non-secret location_lore vectors
+            existing_taken_prop_ids = {
+                r["id"] for r in conn.execute("SELECT id FROM location_props").fetchall()
+            }
             for loc in base_locations:
                 mapped_loc_id = loc_id_map.get(loc.id)
                 if not mapped_loc_id:
                     continue
+                for p_idx, prop in enumerate(getattr(loc, "props", None) or []):
+                    can_reuse_prop_id = (
+                        reuse_ids
+                        and bool(prop.id)
+                        and not prop.id.startswith("new_")
+                        and prop.id not in existing_taken_prop_ids
+                    )
+                    prop_id = prop.id if can_reuse_prop_id else f"prop_{uuid.uuid4().hex[:10]}"
+                    existing_taken_prop_ids.add(prop_id)
+                    raw_lore_id = prop.lore_id
+                    mapped_lore_id: str | None = None
+                    if raw_lore_id:
+                        candidate_lore_id = artifact_id_map.get(raw_lore_id, raw_lore_id)
+                        if candidate_lore_id in valid_new_artifact_ids:
+                            mapped_lore_id = candidate_lore_id
+                    prop_flags = [f for f in prop.flags if f != "artifact"]
+                    if mapped_lore_id:
+                        prop_flags.append("artifact")
+                    conn.execute(
+                        """
+                        INSERT INTO location_props (
+                            id, world_id, location_id, campaign_id, name, note, flags_json, lore_id, is_hidden, sort_order
+                        )
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            prop_id,
+                            target_world_id,
+                            mapped_loc_id,
+                            prop.name,
+                            prop.note,
+                            json.dumps(prop_flags),
+                            mapped_lore_id,
+                            1 if prop.is_hidden else 0,
+                            p_idx,
+                        ),
+                    )
                 for loc_lore in loc.lore_nodes:
                     can_reuse_loc_lore_id = (
                         campaigns_using == 0

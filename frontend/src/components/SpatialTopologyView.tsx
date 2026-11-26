@@ -7,6 +7,8 @@ import {
   LocationLoreNodeDraft,
   LocationNode,
   LocationOverrideOptions,
+  LocationProp,
+  LoreNode,
   MechanicsTopicId,
   WorldMediaItem,
 } from "../types";
@@ -17,6 +19,7 @@ import {
   MapDetailsDrawer,
   WorldPromptContext,
 } from "./map/MapDetailsDrawer";
+import type { PropTransferTarget } from "./map/MapPropsSection";
 import {
   EmptyCanvasCreateModal,
   EmptyCanvasLinkState,
@@ -171,6 +174,21 @@ export interface SpatialTopologyViewProps {
     edgeId: string,
     revealed: boolean
   ) => Promise<void> | void;
+  revealedPropIds?: readonly string[];
+  worldArtifactLore?: LoreNode[];
+  propTransferTargets?: PropTransferTarget[];
+  onSaveCampaignLocationProps?: (
+    locationId: string,
+    props: LocationProp[]
+  ) => Promise<void> | void;
+  onTogglePropReveal?: (
+    propId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
+  onTransferProp?: (
+    propId: string,
+    holderId: string
+  ) => Promise<void> | void;
   isMutatingLocked?: boolean;
   initialContainerFocus?: "active" | "root";
   externalFocusRequest?: {
@@ -209,6 +227,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   onToggleLoreReveal,
   revealedEdgeIds = [],
   onToggleEdgeReveal,
+  revealedPropIds = [],
+  worldArtifactLore = [],
+  propTransferTargets,
+  onSaveCampaignLocationProps,
+  onTogglePropReveal,
+  onTransferProp,
   isMutatingLocked = false,
   initialContainerFocus = "active",
   externalFocusRequest = null,
@@ -2066,6 +2090,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               unlockLore={unlockLore}
               revealedLoreIds={revealedLoreIds}
               onToggleLoreReveal={onToggleLoreReveal}
+              revealedPropIds={revealedPropIds}
+              worldArtifactLore={worldArtifactLore}
+              propTransferTargets={propTransferTargets}
+              onSaveCampaignLocationProps={onSaveCampaignLocationProps}
+              onTogglePropReveal={onTogglePropReveal}
+              onTransferProp={onTransferProp}
               usedIconKeys={usedMapIconKeys}
               onOpenIconBrowser={(target) => {
                 if (!effectiveMutatingLocked) setIconBrowserTarget(target);

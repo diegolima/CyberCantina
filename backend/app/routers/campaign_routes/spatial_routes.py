@@ -12,6 +12,7 @@ from app.schemas.turn import (
 from app.schemas.world import (
     CampaignContainerLoreUpdatePayload,
     CampaignLocationLoreUpdatePayload,
+    CampaignLocationPropsUpdatePayload,
 )
 from fastapi import (
     Depends,
@@ -25,6 +26,8 @@ from app.routers.campaign_routes.schemas_and_gate import (
     CampaignEdgeRevealRequest,
     CampaignLoreRevealRequest,
     CampaignMajorEventUpdateRequest,
+    CampaignPropRevealRequest,
+    CampaignPropTransferRequest,
     CampaignWorldLoreEntryUpsertRequest,
     CampaignWorldLoreEntryUpsertResponse,
     CampaignWorldLoreUpdateRequest,
@@ -376,6 +379,84 @@ async def update_campaign_container_lore(
             campaign_id,
             container_id,
             req.lore_nodes,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put(
+    "/api/campaigns/{campaign_id}/locations/{location_id}/props",
+    response_model=CampaignStateBundle,
+)
+def update_campaign_location_props(
+    campaign_id: str,
+    location_id: str,
+    req: CampaignLocationPropsUpdatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Replace portable props for a Level 0 location on the active campaign branch (requires GM Mode)."""
+    try:
+        return _resolve_facade_attr("get_repo", get_repo)().update_campaign_location_props(
+            campaign_id,
+            location_id,
+            req.props,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/props/{prop_id}/reveal",
+    response_model=CampaignStateBundle,
+)
+def toggle_campaign_prop_reveal(
+    campaign_id: str,
+    prop_id: str,
+    req: CampaignPropRevealRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Manually reveal or hide a tracked location prop on the active branch (requires GM Mode)."""
+    try:
+        return _resolve_facade_attr("get_repo", get_repo)().toggle_campaign_prop_reveal(
+            campaign_id,
+            prop_id,
+            revealed=req.revealed,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/props/{prop_id}/transfer",
+    response_model=CampaignStateBundle,
+)
+def transfer_campaign_prop(
+    campaign_id: str,
+    prop_id: str,
+    req: CampaignPropTransferRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Manually transfer an unclaimed location prop to Player or NPC inventory (requires GM Mode)."""
+    try:
+        return _resolve_facade_attr("get_repo", get_repo)().transfer_campaign_prop(
+            campaign_id,
+            prop_id,
+            holder_id=req.holder_id,
             owner_id=current_user.id,
         )
     except PermissionError as exc:

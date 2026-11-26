@@ -319,6 +319,12 @@
   font-weight: 700;
 }
 
+.composer-count-badge--muted {
+  background: var(--amber-bg);
+  color: var(--accent-amber);
+  border: 1px solid var(--amber-border);
+}
+
 /* Flyout Popover Menus */
 .composer-flyout-menu {
   position: absolute;

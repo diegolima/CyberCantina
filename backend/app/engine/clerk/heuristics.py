@@ -19,12 +19,14 @@ from app.schemas.turn import (
     ImprovisedLocationSpec,
     PostTurnStateDelta,
     PreTurnAnalysis,
+    PropClaim,
     WorldPostTurnDelta,
 )
 from app.schemas.world import (
     DEFAULT_EXTERIOR_DISTANCE_METERS,
     DEFAULT_INTERIOR_DISTANCE_METERS,
     LocationNode,
+    LocationProp,
     NeighborLocationView,
     derive_travel_minutes,
     normalize_compass_direction,
@@ -205,6 +207,60 @@ def _heuristic_spatial_and_inventory_delta(
     )
 
 
+_PICKUP_PROP_RE = re.compile(
+    r"\b(?:pick(?:s|ed|ing)?\s+up|grab(?:s|bed|bing)?|take(?:s)?|took|"
+    r"pocket(?:s|ed|ing)?|stash(?:es|ed|ing)?|collect(?:s|ed|ing)?|"
+    r"snatch(?:es|ed|ing)?|retrieve(?:s|d|ing)?|scoop(?:s|ed|ing)?\s+up|"
+    r"slip(?:s|ped)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_heuristic_prop_claims(
+    *,
+    user_message: str,
+    raw_prose: str,
+    visible_location_props: list[LocationProp] | None,
+    present_characters: list[CharacterRecord] | None = None,
+) -> list[PropClaim]:
+    """Deterministically detect obvious room-prop pickups when running offline."""
+    if not visible_location_props:
+        return []
+    combined = f"{user_message}\n{raw_prose}".strip()
+    if not combined:
+        return []
+    claims: list[PropClaim] = []
+    seen_ids: set[str] = set()
+    chars = list(present_characters or [])
+    for prop in visible_location_props:
+        if prop.id in seen_ids:
+            continue
+        prop_name = (prop.name or "").strip()
+        if len(prop_name) < 3:
+            continue
+        name_pat = re.compile(rf"\b{re.escape(prop_name)}\b", re.IGNORECASE)
+        for m in name_pat.finditer(combined):
+            window_start = max(0, m.start() - 60)
+            window_end = min(len(combined), m.end() + 45)
+            snippet = combined[window_start:window_end]
+            pickup_m = _PICKUP_PROP_RE.search(snippet)
+            if not pickup_m:
+                continue
+            holder_id = "player"
+            subject_ctx = snippet[: pickup_m.start()].lower()
+            for ch in chars:
+                first_tok = ch.name.strip().lower().split()[0] if ch.name.strip() else ""
+                if (ch.name.strip().lower() in subject_ctx) or (
+                    len(first_tok) >= 3 and re.search(rf"\b{re.escape(first_tok)}\b", subject_ctx)
+                ):
+                    holder_id = ch.id
+                    break
+            claims.append(PropClaim(prop_id=prop.id, holder_id=holder_id))
+            seen_ids.add(prop.id)
+            break
+    return claims
+
+
 def heuristic_world_post_turn_delta(
     *,
     user_message: str,
@@ -216,6 +272,8 @@ def heuristic_world_post_turn_delta(
     candidate_secrets: list | None = None,
     prev_player_stance: PhysicalStance = "unspecified",
     prev_player_context: str = "",
+    visible_location_props: list[LocationProp] | None = None,
+    present_characters: list[CharacterRecord] | None = None,
 ) -> WorldPostTurnDelta:
     """Deterministic fallback global world state extractor (clock, spatial graph, scene flags)."""
     legacy = _heuristic_spatial_and_inventory_delta(
@@ -270,6 +328,13 @@ def heuristic_world_post_turn_delta(
         )
     )
 
+    claimed_props = _extract_heuristic_prop_claims(
+        user_message=user_message,
+        raw_prose=raw_prose,
+        visible_location_props=visible_location_props,
+        present_characters=present_characters,
+    )
+
     return WorldPostTurnDelta(
         elapsed_minutes=elapsed,
         new_world_timestamp=new_ts,
@@ -280,6 +345,7 @@ def heuristic_world_post_turn_delta(
         scene_flags_updated=legacy.scene_flags_updated,
         scene_flags_removed=legacy.scene_flags_removed,
         revealed_secret_lore_ids=revealed_ids,
+        claimed_props=claimed_props,
         major_event=None,
         player_physical_stance=player_stance,
         player_physical_context=player_ctx,

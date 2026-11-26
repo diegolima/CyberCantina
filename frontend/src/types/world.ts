@@ -1,3 +1,5 @@
+import type { ItemFlag } from "./character";
+
 export interface WorldGlobalRules {
   genre: string;
   tone: string;
@@ -5,6 +7,17 @@ export interface WorldGlobalRules {
   tech_or_magic_rules: string;
   starting_timestamp: string;
   describe_on_first_visit?: boolean;
+  auto_spawn_props_on_search_crit?: boolean;
+}
+
+export interface LocationProp {
+  id?: string;
+  name: string;
+  note: string;
+  flags: ItemFlag[];
+  lore_id?: string | null;
+  is_hidden: boolean;
+  auto_spawned?: boolean;
 }
 
 export type CompassDirection = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
@@ -124,6 +137,7 @@ export interface LocationNode {
   video_mime_type?: string | null;
   is_visited?: boolean;
   lore_nodes?: LoreNode[];
+  props?: LocationProp[];
 }
 
 export interface LocationEdge {
@@ -199,6 +213,7 @@ export interface LocationNodeDraft {
   ui_y?: number | null;
   icon?: string | null;
   lore_nodes?: LocationLoreNodeDraft[];
+  props?: LocationProp[];
 }
 
 export interface LocationEdgeDraft {

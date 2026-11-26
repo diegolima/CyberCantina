@@ -27,6 +27,8 @@ import {
   LocationLoreNodeDraft,
   LocationNode,
   LocationOverrideOptions,
+  LocationProp,
+  LoreNode,
   MagicContextRef,
   MechanicsTopicId,
   WorldMediaItem,
@@ -55,6 +57,7 @@ import {
 import { containerHasVisitedDescendants } from "./mapValidation";
 import { MapLinkInspectorSection } from "./MapLinkInspectorSection";
 import { MapLoreSection } from "./MapLoreSection";
+import { MapPropsSection, type PropTransferTarget } from "./MapPropsSection";
 import type {
   LinkPairInspectorData,
   ProjectedGhostEdge,
@@ -152,6 +155,21 @@ export interface MapDetailsDrawerProps {
   onToggleLoreReveal?: (
     loreId: string,
     revealed: boolean
+  ) => Promise<void> | void;
+  revealedPropIds?: readonly string[];
+  worldArtifactLore?: LoreNode[];
+  propTransferTargets?: PropTransferTarget[];
+  onSaveCampaignLocationProps?: (
+    locationId: string,
+    props: LocationProp[]
+  ) => Promise<void> | void;
+  onTogglePropReveal?: (
+    propId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
+  onTransferProp?: (
+    propId: string,
+    holderId: string
   ) => Promise<void> | void;
   usedIconKeys?: string[];
   worldMedia?: WorldMediaItem[];
@@ -1009,6 +1027,12 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   unlockLore = false,
   revealedLoreIds = [],
   onToggleLoreReveal,
+  revealedPropIds = [],
+  worldArtifactLore = [],
+  propTransferTargets,
+  onSaveCampaignLocationProps,
+  onTogglePropReveal,
+  onTransferProp,
   usedIconKeys = [],
   worldMedia = [],
   visitedContainerIds = [],
@@ -1747,7 +1771,8 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           />
         </div>
 
-        {selectedContainer.depth === 1 ? (          <MapLoreSection
+        {selectedContainer.depth === 1 ? (
+          <MapLoreSection
             mode={mode}
             isMutatingLocked={isMutatingLocked}
             targetId={selectedContainer.id}
@@ -2362,6 +2387,27 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           ))}
         </div>
       )}
+      <MapPropsSection
+        mode={mode}
+        isMutatingLocked={isMutatingLocked}
+        locationId={selectedLocation.id}
+        locationName={selectedLocation.name}
+        propsList={selectedLocation.props ?? []}
+        savedInDb={isLocationSavedInDb}
+        worldArtifactLore={worldArtifactLore}
+        unlockLore={unlockLore}
+        revealedPropIds={revealedPropIds}
+        onDraftUpdate={
+          mode === "editor"
+            ? (nextProps) =>
+                onPatchLocation(selectedLocation.id, { props: nextProps })
+            : undefined
+        }
+        onCampaignSave={onSaveCampaignLocationProps}
+        onTogglePropReveal={onTogglePropReveal}
+        onTransferProp={onTransferProp}
+        transferTargets={propTransferTargets}
+      />
       <MapLoreSection
         mode={mode}
         isMutatingLocked={isMutatingLocked}

@@ -187,6 +187,15 @@ class CampaignEdgeRevealRequest(BaseModel):
 class CampaignWorldSettingsPatchRequest(BaseModel):
     describe_on_first_visit: bool | None = None
     unlock_lore: bool | None = None
+    auto_spawn_props_on_search_crit: bool | None = None
+
+
+class CampaignPropRevealRequest(BaseModel):
+    revealed: bool
+
+
+class CampaignPropTransferRequest(BaseModel):
+    holder_id: str = Field(..., min_length=1, max_length=128)
 
 
 class CampaignWorldLoreUpdateRequest(BaseModel):

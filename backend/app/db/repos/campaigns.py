@@ -132,7 +132,10 @@ class CampaignsMixin:
         camp_world_settings = CampaignWorldSettings(
             describe_on_first_visit=getattr(
                 world.global_rules, "describe_on_first_visit", True
-            )
+            ),
+            auto_spawn_props_on_search_crit=getattr(
+                world.global_rules, "auto_spawn_props_on_search_crit", False
+            ),
         )
 
         conn = self._connect()

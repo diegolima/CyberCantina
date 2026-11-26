@@ -285,6 +285,17 @@ def extract_campaign_export_bundle(
                 if sup and str(sup) not in exported_turn_ids:
                     edge["superseded_at_turn_id"] = None
 
+            try:
+                camp_props = [
+                    dict(r)
+                    for r in conn.execute(
+                        "SELECT * FROM location_props WHERE campaign_id = ? ORDER BY sort_order ASC, rowid ASC",
+                        (campaign_id,),
+                    ).fetchall()
+                ]
+            except Exception:
+                camp_props = []
+
             # Base-world nodes/edges superseded at an exported turn
             superseded_base_locations = [
                 {
@@ -323,6 +334,7 @@ def extract_campaign_export_bundle(
             imp_containers = []
             imp_locations = []
             imp_edges = []
+            camp_props = []
             superseded_base_locations = []
             superseded_base_edges = []
 
@@ -459,6 +471,7 @@ def extract_campaign_export_bundle(
             "containers": imp_containers,
             "locations": imp_locations,
             "edges": imp_edges,
+            "location_props": camp_props,
             "overrides": spatial_overrides,
             "superseded_base_locations": superseded_base_locations,
             "superseded_base_edges": superseded_base_edges,
@@ -1084,6 +1097,14 @@ def ingest_campaigns_atomic(
                 if old_lid:
                     id_remap[old_lid] = f"loc_{uuid.uuid4().hex[:10]}"
 
+            imp_props = [
+                p for p in (spatial_deltas.get("location_props") or []) if isinstance(p, dict)
+            ]
+            for pr in imp_props:
+                old_pid = str(pr.get("id") or "")
+                if old_pid:
+                    id_remap[old_pid] = f"prop_{uuid.uuid4().hex[:10]}"
+
             lore_deltas = camp.get("lore_deltas") or {}
             camp_lore_nodes = [
                 ln for ln in (lore_deltas.get("lore_nodes") or []) if isinstance(ln, dict)
@@ -1344,6 +1365,35 @@ def ingest_campaigns_atomic(
                     ),
                 )
 
+            for pr in imp_props:
+                mapped_loc_id = id_remap.get(str(pr.get("location_id") or ""))
+                if not mapped_loc_id:
+                    continue
+                old_pid = str(pr.get("id") or "")
+                new_pid = id_remap.get(old_pid) or f"prop_{uuid.uuid4().hex[:10]}"
+                old_lore = pr.get("lore_id")
+                mapped_lore = id_remap.get(str(old_lore)) if old_lore else None
+                conn.execute(
+                    """
+                    INSERT INTO location_props (
+                        id, world_id, location_id, campaign_id, name, note, flags_json, lore_id, is_hidden, sort_order
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_pid,
+                        new_world_id,
+                        mapped_loc_id,
+                        new_camp_id,
+                        str(pr.get("name") or "Prop")[:160],
+                        str(pr.get("note") or "")[:300],
+                        str(pr.get("flags_json") or "[]"),
+                        mapped_lore,
+                        1 if pr.get("is_hidden") else 0,
+                        int(pr.get("sort_order") or 0),
+                    ),
+                )
+
             for sup_loc in spatial_deltas.get("superseded_base_locations") or []:
                 if isinstance(sup_loc, dict):
                     mapped_lid = id_remap.get(str(sup_loc.get("id") or ""))
@@ -1501,15 +1551,47 @@ def ingest_campaigns_atomic(
                 mapped_loc = id_remap.get(str(snap.get("active_location_id") or ""))
                 if not mapped_tid or not mapped_loc:
                     continue
+                remapped_spawned_props: list[dict[str, Any]] = []
+                try:
+                    raw_sp_list = json.loads(snap.get("spawned_props_json") or "[]")
+                    if isinstance(raw_sp_list, list):
+                        for sp in raw_sp_list:
+                            if not isinstance(sp, dict):
+                                continue
+                            sp_copy = dict(sp)
+                            old_sp_id = str(sp_copy.get("id") or "")
+                            if old_sp_id:
+                                if old_sp_id not in id_remap:
+                                    id_remap[old_sp_id] = f"prop_{uuid.uuid4().hex[:10]}"
+                                sp_copy["id"] = id_remap[old_sp_id]
+                            sp_copy["location_id"] = _remap_id(sp_copy.get("location_id"), id_remap)
+                            if sp_copy.get("lore_id"):
+                                sp_copy["lore_id"] = id_remap.get(str(sp_copy["lore_id"]))
+                            remapped_spawned_props.append(sp_copy)
+                except Exception:
+                    remapped_spawned_props = []
+
+                remapped_search_depths: dict[str, int] = {}
+                try:
+                    raw_sd_map = json.loads(snap.get("location_search_last_turn_depth_json") or "{}")
+                    if isinstance(raw_sd_map, dict):
+                        for k, v in raw_sd_map.items():
+                            remapped_search_depths[str(_remap_id(str(k), id_remap))] = int(v)
+                except Exception:
+                    remapped_search_depths = {}
+
                 conn.execute(
                     """
                     INSERT INTO world_state_snapshots (
                         turn_id, world_timestamp, active_location_id, scene_flags_json,
                         campaign_elapsed_minutes, visited_location_ids_json,
                         visited_container_ids_json, revealed_lore_ids_json,
-                        revealed_edge_ids_json, parties_json
+                        revealed_edge_ids_json, revealed_prop_ids_json,
+                        claimed_prop_ids_json, spawned_props_json,
+                        location_search_last_turn_depth_json, auto_spawned_prop_location_ids_json,
+                        parties_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mapped_tid,
@@ -1521,6 +1603,11 @@ def ingest_campaigns_atomic(
                         _remap_id_list_json(snap.get("visited_container_ids_json"), id_remap),
                         _remap_id_list_json(snap.get("revealed_lore_ids_json") or "[]", id_remap),
                         _remap_id_list_json(snap.get("revealed_edge_ids_json") or "[]", id_remap),
+                        _remap_id_list_json(snap.get("revealed_prop_ids_json") or "[]", id_remap),
+                        _remap_id_list_json(snap.get("claimed_prop_ids_json") or "[]", id_remap),
+                        json.dumps(remapped_spawned_props),
+                        json.dumps(remapped_search_depths),
+                        _remap_id_list_json(snap.get("auto_spawned_prop_location_ids_json") or "[]", id_remap),
                         _remap_parties_json(snap.get("parties_json"), id_remap),
                     ),
                 )

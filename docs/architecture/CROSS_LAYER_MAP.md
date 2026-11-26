@@ -51,6 +51,7 @@
 | `POST` | `/api/campaigns/{campaign_id}/location-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/locations` | `app.routers.campaign_routes.spatial_routes.create_campaign_linked_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/locations/{location_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_location_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `PUT` | `/api/campaigns/{campaign_id}/locations/{location_id}/props` | `app.routers.campaign_routes.spatial_routes.update_campaign_location_props` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_world_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/lore/entries` | `app.routers.campaign_routes.spatial_routes.upsert_campaign_world_lore_entry` | `CampaignWorldLoreEntryUpsertResponse` | `frontend/src/api/gm.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/lore/{lore_id}/reveal` | `app.routers.campaign_routes.spatial_routes.toggle_campaign_lore_reveal` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
@@ -62,6 +63,8 @@
 | `GET` | `/api/campaigns/{campaign_id}/persona-state` | `app.routers.campaign_routes.crud_and_state.get_campaign_player_turn_state` | `Union` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/player-physical-state-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_player_physical_state` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/prompt-preset` | `app.routers.prompts.set_campaign_prompt_preset` | `CampaignRecord` | `frontend/src/api/prompts.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/props/{prop_id}/reveal` | `app.routers.campaign_routes.spatial_routes.toggle_campaign_prop_reveal` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/props/{prop_id}/transfer` | `app.routers.campaign_routes.spatial_routes.transfer_campaign_prop` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/campaigns/{campaign_id}/state` | `app.routers.campaign_routes.crud_and_state.get_campaign_state` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/turns` | `app.routers.campaign_routes.turn_streaming.submit_campaign_turn_sync` | `CampaignStateBundle` | *(backend-only / test / SSE)* |
 | `DELETE` | `/api/campaigns/{campaign_id}/turns/last` | `app.routers.campaign_routes.crud_and_state.delete_campaign_last_turn` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
@@ -216,6 +219,9 @@ erDiagram
     location_containers ||--o{ location_nodes : references
     media_assets ||--o{ location_nodes : references
     worlds ||--o{ location_nodes : references
+    campaigns ||--o{ location_props : references
+    location_nodes ||--o{ location_props : references
+    worlds ||--o{ location_props : references
     campaigns ||--o{ lore_nodes : references
     location_containers ||--o{ lore_nodes : references
     location_nodes ||--o{ lore_nodes : references
@@ -254,6 +260,7 @@ erDiagram
 | `world_media_links` | `media_assets`, `worlds` |
 | `location_containers` | `location_containers`, `media_assets`, `worlds` |
 | `location_nodes` | `location_containers`, `media_assets`, `worlds` |
+| `location_props` | `campaigns`, `location_nodes`, `worlds` |
 | `location_edges` | `location_nodes`, `worlds` |
 | `characters` | `users`, `worlds` |
 | `character_versions` | `characters` |
@@ -511,6 +518,12 @@ erDiagram
 | File | Summary |
 | :--- | :--- |
 | `backend/app/engine/phase5_clerk.py` | Phase 5: Async Post-Turn Clerk & Character State Engine. |
+
+#### `app.engine.prop_spawn`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/engine/prop_spawn.py` | Critical-success situational room prop generation with strict power bounds. |
 
 #### `app.engine.telemetry`
 
@@ -808,6 +821,7 @@ erDiagram
 | `frontend/src/components/map/MapLinkInspectorSection.tsx` |
 | `frontend/src/components/map/MapLoreSection.tsx` |
 | `frontend/src/components/map/MapPaletteBar.tsx` |
+| `frontend/src/components/map/MapPropsSection.tsx` |
 | `frontend/src/components/map/PortalPromotionModal.tsx` |
 | `frontend/src/components/map/SpatialTopologyCanvas.tsx` |
 | `frontend/src/components/map/TargetEdgeSelector.tsx` |

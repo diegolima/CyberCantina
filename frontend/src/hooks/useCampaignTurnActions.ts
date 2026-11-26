@@ -14,6 +14,7 @@ import type {
   LocationEdge,
   LocationLoreNodeDraft,
   LocationNode,
+  LocationProp,
   LocationOverrideOptions,
   MemoryShard,
   Phase3AgentProgressItem,
@@ -126,6 +127,8 @@ export function useCampaignTurnActions({
           duration_minutes: opts.durationMinutes,
           character_choices: opts.characterChoices,
           ...(opts.partyAction ? { party_action: opts.partyAction } : {}),
+          ...(opts.searchAction ? { search_action: true } : {}),
+          ...(opts.searchFocus ? { search_focus: opts.searchFocus } : {}),
         },
         {
           onChoicesAdjusted: (data) => {
@@ -746,6 +749,45 @@ export function useCampaignTurnActions({
     setBundle(updated);
   };
 
+  const handleSaveCampaignLocationProps = async (
+    locationId: string,
+    props: LocationProp[]
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.updateCampaignLocationProps(
+      bundle.campaign.id,
+      locationId,
+      props
+    );
+    setBundle(updated);
+  };
+
+  const handleToggleCampaignPropReveal = async (
+    propId: string,
+    revealed: boolean
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.toggleCampaignPropReveal(
+      bundle.campaign.id,
+      propId,
+      revealed
+    );
+    setBundle(updated);
+  };
+
+  const handleTransferCampaignProp = async (
+    propId: string,
+    holderId: string
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.transferCampaignProp(
+      bundle.campaign.id,
+      propId,
+      holderId
+    );
+    setBundle(updated);
+  };
+
   const handleSaveCampaignMap = async (payload: {
     containers: LocationContainer[];
     locations: LocationNode[];
@@ -846,6 +888,9 @@ export function useCampaignTurnActions({
     handleDeleteCampaignMajorEvent,
     handleSaveCampaignLocationLore,
     handleSaveCampaignContainerLore,
+    handleSaveCampaignLocationProps,
+    handleToggleCampaignPropReveal,
+    handleTransferCampaignProp,
     handleSaveCampaignMap,
     handleCheckoutTurn,
     handleDeleteLastTurn,

@@ -8,7 +8,10 @@ import {
   type MechanicsSubcategoryId,
   type MechanicsTopicId,
 } from "../../../types";
-import { getSlashCommandSpec } from "../../../utils/slashCommands";
+import {
+  SEARCH_COOLDOWN_TURNS,
+  getSlashCommandSpec,
+} from "../../../utils/slashCommands";
 import {
   LINK_SPEED_PRESET_GROUPS,
   MAX_EDGE_SPEED_MODIFIER,
@@ -71,6 +74,7 @@ export interface MechanicsArticle {
 }
 
 const LOOK_SPEC = getSlashCommandSpec("look");
+const SEARCH_SPEC = getSlashCommandSpec("search");
 const WAIT_SPEC = getSlashCommandSpec("wait");
 const EVENT_SPEC = getSlashCommandSpec("event");
 const NARRATE_SPEC = getSlashCommandSpec("narrate");
@@ -700,6 +704,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "contested",
       "hazard",
       "bystander",
+      "/search",
     ],
     inOneLine:
       "The footer dice pill controls whether Phase 1 triggers real 1d20 + modifier checks automatically, forces a roll on every turn, or suppresses dice for pure dialogue.",
@@ -729,6 +734,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     howItChanges: [
       "Click the dice pill in the bottom-right composer footer to cycle Auto → Forced → Disabled.",
       "Staging gated Director Choices (/choice with @success, @fail, etc.) or stepping onto Blocked/Obstacle exits promotes Disabled to Auto automatically.",
+      `${SEARCH_SPEC.syntax} forces a fixed DC ${DEFAULT_GATE_DC} room-search roll even in empty rooms (promoting Disabled to Forced; pinned manual rolls are respected but disable Crit prop auto-spawn).`,
       "Narrator turns (/look, /wait, /event, /narrate) never roll dice.",
     ],
     effectOnPlay: [
@@ -979,6 +985,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     scales: NARRATOR_SCALES,
     howItChanges: [
       "Trigger via the Narrator menu in the composer footer or type /look, /wait, /event, or /narrate directly.",
+      `/${LOOK_SPEC.name} stays strictly neutral and highlights visible tracked Location Props without rolling; use ${SEARCH_SPEC.syntax} (DC ${DEFAULT_GATE_DC}, ${SEARCH_COOLDOWN_TURNS}-turn room cooldown) for an active character inspection roll.`,
       "On normal dialogue/action turns, Phase 5 Clerk estimates elapsed minutes; on /wait or map travel, explicit durations advance the World Clock deterministically.",
     ],
     effectOnPlay: [
@@ -995,7 +1002,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
         },
         {
           label: "Dice Rule",
-          value: "Narrator turns strictly suppress d20 checks",
+          value: "Narrator turns strictly suppress d20 checks (/search is a character action)",
         },
       ],
     },
@@ -1138,6 +1145,8 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "hierarchy",
       "building",
       "district",
+      "props",
+      "location props",
     ],
     inOneLine:
       "Worlds organize Level 0 Locations inside nested Level 1–4 Containers connected across thresholds by [Entry/Exit Portal] rooms and cross-boundary links.",
@@ -1149,7 +1158,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     ],
     effectOnPlay: [
       "Phase 2 injects hierarchical <spatial_hierarchy> breadcrumbs and Level 1 ambient lore so characters understand where they are in the world.",
-      "Only Level 0 Locations and Level 1 Containers carry local lore nodes; unvisited nodes stay hidden in Player Mode until discovered.",
+      "Only Level 0 Locations and Level 1 Containers carry local lore nodes; tracked portable Location Props attach exclusively to Level 0 Locations and stay excluded from World Codex and RAG.",
     ],
     relatedTopicIds: [
       "spatial-links-travel",
@@ -1464,9 +1473,13 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "artifact",
       "fifo",
       "rag",
+      "props",
+      "hidden props",
+      "/search",
+      "auto-spawn",
     ],
     inOneLine:
-      "Global, Location, Level 1 Container, and Artifact lore stay spoiler-gated until discovered, while Scene Flags track temporary room state via FIFO inside Context Health → Scene & Recall.",
+      "Global, Location, Level 1 Container, Artifact lore, and hidden Location Props stay spoiler-gated until discovered, while Scene Flags track temporary room state via FIFO inside Context Health → Scene & Recall.",
     scales: [
       {
         label: "World / Artifact Lore",
@@ -1483,6 +1496,13 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
         accent: "cyan",
       },
       {
+        label: "Location Props & /search",
+        rangeOrTag: `DC ${DEFAULT_GATE_DC} · ${SEARCH_COOLDOWN_TURNS}-turn cooldown`,
+        meaning:
+          "Tracked Level 0 portable items (excluded from Codex/RAG). Visible props hint on /look; hidden props unlock on Clean/Critical Success via /search or discovery rolls. Optional Critical auto-spawn creates 1 bounded utility prop in an empty room.",
+        accent: "amber",
+      },
+      {
         label: "Scene Flags",
         rangeOrTag: "FIFO · Max 10",
         meaning:
@@ -1492,6 +1512,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     ],
     howItChanges: [
       "Phase 5 Clerk detects when the substance of a secret location/container lore entry is spoken or uncovered in public prose and reveals it on that branch.",
+      "When a Player or co-present NPC explicitly picks up a visible room prop, Phase 5 Clerk transfers it into their inventory and removes it from the room on that branch.",
       "Scene Flags append on turn resolution and automatically evict oldest flags once the active cap (default 10) is reached.",
     ],
     effectOnPlay: [
@@ -1734,29 +1755,31 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "ghost",
       "spoiler",
       "edit lore",
+      "props",
+      "search cooldown",
     ],
     inOneLine:
-      "Toggling Unlock Lore & Secrets (GM Mode) in World Settings reveals hidden secrets and unlocks campaign-scoped authoring tools—while AI characters still obey in-game discovery rules.",
+      "Toggling Unlock Lore & Secrets (GM Mode) in World Settings reveals hidden secrets and props, bypasses /search room cooldowns, and unlocks campaign-scoped authoring tools—while AI characters still obey in-game discovery rules.",
     scales: [
       {
-        label: "Codex, Map & Index Secrets",
+        label: "Codex, Map, Props & Index",
         rangeOrTag: "UI-Only Reveal",
         meaning:
-          "Shows undiscovered secret lore entries (in Codex and Context Health → Lore Index), unrevealed Secret Map Links (as dashed violet ghost lines), and reveals toggle buttons.",
+          "Shows undiscovered secret lore entries, hidden Location Props, unrevealed Secret Map Links (dashed violet lines), and Reveal/Hide toggles.",
         accent: "amber",
       },
       {
-        label: "Editing & Major Events",
+        label: "Editing, Props & Major Events",
         rangeOrTag: "Branch-Scoped CoW",
         meaning:
-          "Unlocks adding/editing/deleting campaign World Codex entries, Location/L1 Container lore, visited room details, and Major Events.",
+          "Unlocks adding/editing/deleting campaign Codex lore, Location/L1 lore, Level 0 Location Props (including instant Transfer to Player/NPC), visited room details, and Major Events.",
         accent: "violet",
       },
       {
-        label: "Scoped Map Auto-Layout",
+        label: "Scoped Auto-Layout & /search",
         rangeOrTag: "GM Mode Only",
         meaning:
-          "Exposes Auto-Layout preview on the map toolbar (hidden in Player Mode so unrevealed secret topology cannot be inferred).",
+          `Exposes Auto-Layout preview on the map toolbar and bypasses the ${SEARCH_COOLDOWN_TURNS}-turn per-room cooldown on /search (also allowing Crit auto-spawn even when manual dice are pinned).`,
         accent: "cyan",
       },
     ],

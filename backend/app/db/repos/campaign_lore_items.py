@@ -17,16 +17,20 @@ from app.schemas.character import (
     normalize_item_key,
     strip_item_location_affixes,
 )
+from app.schemas.persona import PersonaItemInstance
 from app.schemas.turn import (
     CampaignRecord,
     CampaignStateBundle,
+    SpawnedLocationProp,
 )
 from app.schemas.world import (
     LocationLoreNodeDraft,
+    LocationProp,
     LoreNode,
     WorldLoreNodeDraft,
     normalize_and_validate_entity_tags,
 )
+from app.db.repos.turns import resolve_effective_location_props
 from app.db.repos.base import (
     UNSET,
     _validate_world_artifact_lore_id,
@@ -1495,6 +1499,381 @@ class CampaignLoreItemsMixin:
                     (new_post_turn.model_dump_json(), turn_id),
                 )
 
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    @staticmethod
+    def _apply_location_props_diff_to_snapshot_conn(
+        conn: Any,
+        *,
+        leaf_turn_id: str,
+        location_id: str,
+        base_props: list[LocationProp],
+        next_props: list[LocationProp],
+        world_id: str,
+    ) -> None:
+        """Apply GM prop edits for `location_id` onto the active leaf world_state_snapshot."""
+        ws_row = conn.execute(
+            """
+            SELECT revealed_prop_ids_json, claimed_prop_ids_json, spawned_props_json
+            FROM world_state_snapshots WHERE turn_id = ?
+            """,
+            (leaf_turn_id,),
+        ).fetchone()
+        revealed_ids: list[str] = []
+        claimed_ids: list[str] = []
+        spawned_props: list[SpawnedLocationProp] = []
+        if ws_row:
+            ws_keys = ws_row.keys()
+            if "revealed_prop_ids_json" in ws_keys and ws_row["revealed_prop_ids_json"]:
+                try:
+                    revealed_ids = list(json.loads(ws_row["revealed_prop_ids_json"] or "[]"))
+                except Exception:
+                    revealed_ids = []
+            if "claimed_prop_ids_json" in ws_keys and ws_row["claimed_prop_ids_json"]:
+                try:
+                    claimed_ids = list(json.loads(ws_row["claimed_prop_ids_json"] or "[]"))
+                except Exception:
+                    claimed_ids = []
+            if "spawned_props_json" in ws_keys and ws_row["spawned_props_json"]:
+                try:
+                    spawned_props = [
+                        SpawnedLocationProp.model_validate(sp)
+                        for sp in json.loads(ws_row["spawned_props_json"] or "[]")
+                    ]
+                except Exception:
+                    spawned_props = []
+
+        other_spawned = [sp for sp in spawned_props if sp.location_id != location_id]
+        existing_spawned_for_loc = {
+            sp.id: sp for sp in spawned_props if sp.location_id == location_id
+        }
+        base_by_id = {p.id: p for p in base_props}
+        next_spawned_for_loc: list[SpawnedLocationProp] = []
+        next_ids_set: set[str] = set()
+
+        for raw_prop in next_props:
+            pid = (
+                raw_prop.id
+                if raw_prop.id and not raw_prop.id.startswith("new_")
+                else f"prop_{uuid.uuid4().hex[:10]}"
+            )
+            if raw_prop.lore_id:
+                _validate_world_artifact_lore_id(conn, world_id, raw_prop.lore_id)
+            clean_prop = raw_prop.model_copy(update={"id": pid})
+            next_ids_set.add(pid)
+            if pid in claimed_ids:
+                claimed_ids = [cid for cid in claimed_ids if cid != pid]
+
+            base_match = base_by_id.get(pid)
+            if base_match is None:
+                prev_sp = existing_spawned_for_loc.get(pid)
+                next_spawned_for_loc.append(
+                    SpawnedLocationProp(
+                        location_id=location_id,
+                        id=clean_prop.id,
+                        name=clean_prop.name,
+                        note=clean_prop.note,
+                        flags=list(clean_prop.flags),
+                        lore_id=clean_prop.lore_id,
+                        is_hidden=clean_prop.is_hidden,
+                        auto_spawned=bool(prev_sp.auto_spawned if prev_sp else clean_prop.auto_spawned),
+                    )
+                )
+            else:
+                changed = (
+                    clean_prop.name != base_match.name
+                    or clean_prop.note != base_match.note
+                    or list(clean_prop.flags) != list(base_match.flags)
+                    or clean_prop.lore_id != base_match.lore_id
+                    or bool(clean_prop.is_hidden) != bool(base_match.is_hidden)
+                )
+                if changed:
+                    next_spawned_for_loc.append(
+                        SpawnedLocationProp(
+                            location_id=location_id,
+                            id=clean_prop.id,
+                            name=clean_prop.name,
+                            note=clean_prop.note,
+                            flags=list(clean_prop.flags),
+                            lore_id=clean_prop.lore_id,
+                            is_hidden=clean_prop.is_hidden,
+                            auto_spawned=False,
+                        )
+                    )
+            if clean_prop.is_hidden and pid in revealed_ids:
+                revealed_ids = [rid for rid in revealed_ids if rid != pid]
+
+        for base_id in base_by_id:
+            if base_id not in next_ids_set:
+                if base_id not in claimed_ids:
+                    claimed_ids.append(base_id)
+                if base_id in revealed_ids:
+                    revealed_ids = [rid for rid in revealed_ids if rid != base_id]
+
+        for prev_sp_id in existing_spawned_for_loc:
+            if prev_sp_id not in next_ids_set and prev_sp_id in revealed_ids:
+                revealed_ids = [rid for rid in revealed_ids if rid != prev_sp_id]
+
+        merged_spawned = [*other_spawned, *next_spawned_for_loc]
+        conn.execute(
+            """
+            UPDATE world_state_snapshots
+            SET revealed_prop_ids_json = ?, claimed_prop_ids_json = ?, spawned_props_json = ?
+            WHERE turn_id = ?
+            """,
+            (
+                json.dumps(list(dict.fromkeys(revealed_ids))),
+                json.dumps(list(dict.fromkeys(claimed_ids))),
+                json.dumps([sp.model_dump() for sp in merged_spawned]),
+                leaf_turn_id,
+            ),
+        )
+
+    def update_campaign_location_props(
+        self,
+        campaign_id: str,
+        location_id: str,
+        props: list[LocationProp],
+        *,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Replace portable props for a Level 0 location on the active campaign branch (GM Mode)."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        self._require_gm_lore_unlocked(campaign)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+        leaf_turn_id = campaign.active_leaf_turn_id
+        branch_turns = self.get_branch_turn_chain(leaf_turn_id)
+        valid_turn_ids = {t.id for t in branch_turns}
+        world = self.get_world(
+            campaign.world_id,
+            valid_turn_ids=valid_turn_ids,
+            campaign_id=campaign_id,
+        )
+        target_loc = next((loc for loc in world.locations if loc.id == location_id), None)
+        if target_loc is None:
+            raise KeyError(f"Location '{location_id}' not found in campaign '{campaign_id}'")
+
+        conn = self._connect()
+        try:
+            self._apply_location_props_diff_to_snapshot_conn(
+                conn,
+                leaf_turn_id=leaf_turn_id,
+                location_id=location_id,
+                base_props=list(target_loc.props or []),
+                next_props=list(props or []),
+                world_id=campaign.world_id,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def toggle_campaign_prop_reveal(
+        self,
+        campaign_id: str,
+        prop_id: str,
+        *,
+        revealed: bool,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Manually mark a room prop as revealed or hidden at the active leaf turn (GM Mode)."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        self._require_gm_lore_unlocked(campaign)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+        leaf_turn_id = campaign.active_leaf_turn_id
+        branch_turns = self.get_branch_turn_chain(leaf_turn_id)
+        leaf_turn = branch_turns[-1]
+        valid_turn_ids = {t.id for t in branch_turns}
+        world = self.get_world(
+            campaign.world_id,
+            valid_turn_ids=valid_turn_ids,
+            campaign_id=campaign_id,
+        )
+
+        found_loc_id: str | None = None
+        found_prop: LocationProp | None = None
+        for loc in world.locations:
+            eff_props = resolve_effective_location_props(
+                loc, leaf_turn.world_snapshot, include_hidden=True
+            )
+            match = next((p for p in eff_props if p.id == prop_id), None)
+            if match is not None:
+                found_loc_id = loc.id
+                found_prop = match
+                break
+        if found_prop is None or found_loc_id is None:
+            raise KeyError(f"Prop '{prop_id}' not found in campaign '{campaign_id}'")
+
+        revealed_ids = list(leaf_turn.world_snapshot.revealed_prop_ids or [])
+        spawned_props = list(leaf_turn.world_snapshot.spawned_props or [])
+        if revealed:
+            if prop_id not in revealed_ids:
+                revealed_ids.append(prop_id)
+        else:
+            revealed_ids = [rid for rid in revealed_ids if rid != prop_id]
+            # Ensure even originally non-hidden props become hidden when GM explicitly hides them
+            existing_sp_idx = next(
+                (i for i, sp in enumerate(spawned_props) if sp.id == prop_id),
+                None,
+            )
+            if existing_sp_idx is not None:
+                spawned_props[existing_sp_idx] = spawned_props[existing_sp_idx].model_copy(
+                    update={"is_hidden": True}
+                )
+            else:
+                spawned_props.append(
+                    SpawnedLocationProp(
+                        location_id=found_loc_id,
+                        id=found_prop.id,
+                        name=found_prop.name,
+                        note=found_prop.note,
+                        flags=list(found_prop.flags),
+                        lore_id=found_prop.lore_id,
+                        is_hidden=True,
+                        auto_spawned=found_prop.auto_spawned,
+                    )
+                )
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE world_state_snapshots
+                SET revealed_prop_ids_json = ?, spawned_props_json = ?
+                WHERE turn_id = ?
+                """,
+                (
+                    json.dumps(list(dict.fromkeys(revealed_ids))),
+                    json.dumps([sp.model_dump() for sp in spawned_props]),
+                    leaf_turn_id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def transfer_campaign_prop(
+        self,
+        campaign_id: str,
+        prop_id: str,
+        *,
+        holder_id: str,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Manually transfer an unclaimed room prop into Player or NPC inventory (GM Mode)."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        self._require_gm_lore_unlocked(campaign)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+        leaf_turn_id = campaign.active_leaf_turn_id
+        branch_turns = self.get_branch_turn_chain(leaf_turn_id)
+        leaf_turn = branch_turns[-1]
+        valid_turn_ids = {t.id for t in branch_turns}
+        world = self.get_world(
+            campaign.world_id,
+            valid_turn_ids=valid_turn_ids,
+            campaign_id=campaign_id,
+        )
+
+        target_prop: LocationProp | None = None
+        for loc in world.locations:
+            eff_props = resolve_effective_location_props(
+                loc, leaf_turn.world_snapshot, include_hidden=True
+            )
+            match = next((p for p in eff_props if p.id == prop_id), None)
+            if match is not None:
+                target_prop = match
+                break
+        if target_prop is None:
+            raise KeyError(f"Unclaimed prop '{prop_id}' not found in campaign '{campaign_id}'")
+
+        clean_holder = (holder_id or "").strip()
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            if clean_holder == "player":
+                pts_row = conn.execute(
+                    "SELECT equipped_json, inventory_json, physical_stance, physical_context FROM persona_turn_states WHERE turn_id = ?",
+                    (leaf_turn_id,),
+                ).fetchone()
+                if pts_row:
+                    eq = [
+                        PersonaItemInstance.model_validate(it)
+                        for it in json.loads(pts_row["equipped_json"] or "[]")
+                    ]
+                    inv = [
+                        PersonaItemInstance.model_validate(it)
+                        for it in json.loads(pts_row["inventory_json"] or "[]")
+                    ]
+                    stance = pts_row["physical_stance"] or "unspecified"
+                    pctx = pts_row["physical_context"] or ""
+                else:
+                    psnap = campaign.persona_snapshot
+                    eq = list(psnap.equipped) if psnap else []
+                    inv = list(psnap.inventory) if psnap else []
+                    stance = "unspecified"
+                    pctx = ""
+                if all(it.id != target_prop.id for it in inv):
+                    inv.append(
+                        PersonaItemInstance(
+                            id=target_prop.id,
+                            name=target_prop.name,
+                            note=target_prop.note,
+                            flags=list(target_prop.flags),
+                            is_secret=False,
+                            trigger_keywords=[target_prop.name.lower()],
+                        )
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO persona_turn_states (
+                        turn_id, equipped_json, inventory_json, physical_stance, physical_context
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(turn_id) DO UPDATE SET inventory_json = excluded.inventory_json
+                    """,
+                    (
+                        leaf_turn_id,
+                        json.dumps([it.model_dump() for it in eq]),
+                        json.dumps([it.model_dump() for it in inv]),
+                        stance,
+                        pctx,
+                    ),
+                )
+            else:
+                item_inst = target_prop.to_item_instance()
+                cs_row = conn.execute(
+                    "SELECT inventory_json FROM character_states WHERE turn_id = ? AND character_id = ?",
+                    (leaf_turn_id, clean_holder),
+                ).fetchone()
+                if not cs_row:
+                    raise KeyError(
+                        f"Character '{clean_holder}' has no state at active turn '{leaf_turn_id}'"
+                    )
+                inv = coerce_item_list(json.loads(cs_row["inventory_json"] or "[]"))
+                if all(it.id != item_inst.id for it in inv):
+                    inv.append(item_inst)
+                conn.execute(
+                    "UPDATE character_states SET inventory_json = ? WHERE turn_id = ? AND character_id = ?",
+                    (dump_items_json(inv), leaf_turn_id, clean_holder),
+                )
+
+            claimed_ids = list(
+                dict.fromkeys([*(leaf_turn.world_snapshot.claimed_prop_ids or []), prop_id])
+            )
+            conn.execute(
+                "UPDATE world_state_snapshots SET claimed_prop_ids_json = ? WHERE turn_id = ?",
+                (json.dumps(claimed_ids), leaf_turn_id),
+            )
             conn.commit()
         finally:
             conn.close()

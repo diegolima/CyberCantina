@@ -5,6 +5,7 @@ import {
   Eye,
   HelpCircle,
   ListChecks,
+  Search,
   Sparkles,
   Users,
   Zap,
@@ -38,6 +39,8 @@ export const SlashCommandIcon: React.FC<SlashCommandIconProps> = ({
       return <Sparkles size={size} className={className} />;
     case "users":
       return <Users size={size} className={className} />;
+    case "search":
+      return <Search size={size} className={className} />;
     case "clock":
       return <Clock size={size} className={className} />;
   }

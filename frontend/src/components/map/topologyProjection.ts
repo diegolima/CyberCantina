@@ -1114,6 +1114,10 @@ export function cloneGraph(
         ...ln,
         entity_tags: [...(ln.entity_tags ?? [])],
       })),
+      props: (l.props ?? []).map((prop) => ({
+        ...prop,
+        flags: [...(prop.flags ?? [])],
+      })),
     })),
     edges: edges.map((e) => ({
       ...e,
@@ -1189,7 +1193,8 @@ export function areGraphSnapshotsEqual(a: GraphSnapshot, b: GraphSnapshot): bool
       (x.ui_y ?? null) !== (y.ui_y ?? null) ||
       (x.icon ?? null) !== (y.icon ?? null) ||
       JSON.stringify(x.environmental_tags ?? []) !== JSON.stringify(y.environmental_tags ?? []) ||
-      JSON.stringify(x.lore_nodes ?? []) !== JSON.stringify(y.lore_nodes ?? [])
+      JSON.stringify(x.lore_nodes ?? []) !== JSON.stringify(y.lore_nodes ?? []) ||
+      JSON.stringify(x.props ?? []) !== JSON.stringify(y.props ?? [])
     ) {
       return false;
     }

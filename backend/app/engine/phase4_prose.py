@@ -67,9 +67,15 @@ def build_offline_simulated_prose(
                 if recalled_items
                 else ""
             )
+            visible_props = [p.name for p in (getattr(active_location, "props", None) or []) if not p.is_hidden]
+            prop_hint = (
+                f" Nearby, {', '.join(visible_props)} catches the light."
+                if visible_props
+                else ""
+            )
             return (
                 f"*{active_location.name} rests in quiet stasis beneath muted lighting. {active_location.description} "
-                f"Sensory markers: {env_tags_str}.{lore_note} {exit_desc}*"
+                f"Sensory markers: {env_tags_str}.{prop_hint}{lore_note} {exit_desc}*"
             )
         elif narrative_mode == "advance":
             return (
@@ -100,6 +106,19 @@ def build_offline_simulated_prose(
             return (
                 f"*You push forward past the far threshold of {active_location.name} alone, "
                 f"your footsteps echoing off the empty structure ahead.*"
+            )
+        if pre_turn.is_search_action and pre_turn.resolved_roll is not None:
+            roll = pre_turn.resolved_roll
+            tier = roll.outcome_tier
+            roll_tag = f"[{tier}: rolled {roll.total} vs DC {roll.difficulty_class}]"
+            if tier in ("Clean Success", "Critical Success"):
+                return (
+                    f"*Inside {active_location.name}, you methodically sweep the room {roll_tag}, "
+                    f"checking every seam, alcove, and surface.*"
+                )
+            return (
+                f"*Inside {active_location.name}, you comb through the surroundings {roll_tag}, "
+                f"but turn up nothing out of the ordinary.*"
             )
         if pre_turn.resolved_roll is not None:
             roll = pre_turn.resolved_roll

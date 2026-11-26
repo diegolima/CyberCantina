@@ -4,7 +4,33 @@ import type {
   SlashCommandAccent,
   SlashCommandIconKey,
   SlashCommandId,
+  WorldStateSnapshot,
 } from "../types";
+
+export const SEARCH_COOLDOWN_TURNS = 5;
+
+export function getLocationSearchCooldownRemaining(
+  snapshot:
+    | Pick<WorldStateSnapshot, "location_search_last_turn_depth">
+    | null
+    | undefined,
+  locationId: string | null | undefined,
+  nextTurnDepth: number,
+  unlockLore: boolean = false
+): number {
+  if (unlockLore || !locationId || !snapshot?.location_search_last_turn_depth) {
+    return 0;
+  }
+  const lastDepth = snapshot.location_search_last_turn_depth[locationId];
+  if (typeof lastDepth !== "number" || !Number.isFinite(lastDepth)) {
+    return 0;
+  }
+  const elapsed = nextTurnDepth - lastDepth;
+  if (elapsed < SEARCH_COOLDOWN_TURNS) {
+    return Math.max(1, SEARCH_COOLDOWN_TURNS - elapsed);
+  }
+  return 0;
+}
 
 export interface SlashSubcommandSpec {
   id: PartySubcommandId;
@@ -36,6 +62,7 @@ export interface SlashCommandAvailabilityContext {
   eligiblePartyInviteCount: number;
   inPlayerParty: boolean;
   isEditingTurn: boolean;
+  searchCooldownRemaining?: number;
 }
 
 export interface SlashCommandAvailability {
@@ -207,6 +234,20 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = Object.freeze([
     subcommands: PARTY_SUBCOMMANDS,
   },
   {
+    id: "search",
+    name: "search",
+    aliases: Object.freeze(["inspect", "investigate"]),
+    iconKey: "search",
+    accent: "amber",
+    syntax: "/search [focus]",
+    shortSyntax: "[focus]",
+    description:
+      "Roll DC 12 to search the current location for hidden props and secrets",
+    placeholder: "Optional search focus (e.g., behind the counter, under the desk)...",
+    example: "/search Behind the dusty counter",
+    acceptsArgs: true,
+  },
+  {
     id: "wait",
     name: "wait",
     aliases: Object.freeze(["pass"]),
@@ -287,6 +328,17 @@ export function getCommandAvailability(
   } else if (id === "event" || id === "look" || id === "wait") {
     if (ctx.isEditingTurn) {
       return { available: false, reason: "Unavailable while editing" };
+    }
+  } else if (id === "search") {
+    if (ctx.isEditingTurn) {
+      return { available: false, reason: "Unavailable while editing" };
+    }
+    const remaining = ctx.searchCooldownRemaining ?? 0;
+    if (remaining > 0) {
+      return {
+        available: false,
+        reason: `Room searched recently (${remaining} turn${remaining === 1 ? "" : "s"} remaining)`,
+      };
     }
   }
   return { available: true, reason: null };

@@ -302,6 +302,15 @@ path = "app.engine.game_mechanics"
 depends_on = []
 
 [[modules]]
+path = "app.engine.prop_spawn"
+depends_on = [
+    "app.config",
+    "app.engine.llm_client",
+    "app.engine.telemetry",
+    "app.schemas",
+]
+
+[[modules]]
 path = "app.engine.gm_talk"
 depends_on = [
     "app.config",
@@ -393,6 +402,7 @@ depends_on = [
     "app.engine.phase4_clerk",
     "app.engine.phase4_prose",
     "app.engine.phase5_clerk",
+    "app.engine.prop_spawn",
     "app.engine.telemetry",
     "app.housekeeping",
     "app.prompts",

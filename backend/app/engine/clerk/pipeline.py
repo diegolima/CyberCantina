@@ -12,6 +12,7 @@ from app.config import (
     settings,
 )
 from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
+from app.db.repos.turns import resolve_effective_location_props
 from app.db.repository import CantinaRepository
 from app.engine.affective_engine import (
     MechanicalTurnSignals,
@@ -29,6 +30,7 @@ from app.engine.character_agent import (
     detect_inventory_disputes,
     enforce_permanent_item_locks,
     heuristic_character_agent_delta,
+    item_names_match_word_bounded,
     resolve_roll_for_character,
     run_character_post_turn_agent,
 )
@@ -64,9 +66,11 @@ from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
     MemoryShard,
+    normalize_item_key,
 )
 from app.schemas.party import USER_PARTY_MEMBER_ID
 from app.schemas.persona import (
+    PersonaItemInstance,
     PersonaRecord,
     PersonaTurnStateSnapshot,
 )
@@ -90,6 +94,7 @@ from app.schemas.turn import (
     Phase4RosterEntry,
     Phase5ProgressCallback,
     PostTurnStateDelta,
+    PropClaim,
     TurnNodeRecord,
     WorldPostTurnDelta,
     WorldStateSnapshot,
@@ -97,6 +102,7 @@ from app.schemas.turn import (
 from app.schemas.world import (
     WALKING_METERS_PER_MINUTE,
     LocationNode,
+    LocationProp,
     LoreNode,
     NeighborLocationView,
     derive_travel_minutes,
@@ -370,6 +376,27 @@ async def run_phase5_post_turn_clerk(
         )
         candidate_secrets_block = f"\nCandidate Unrevealed Secrets at Current Location:\n{secret_lines}\n"
 
+    visible_room_props: list[LocationProp] = resolve_effective_location_props(
+        active_location,
+        completed_turn.world_snapshot,
+        include_hidden=False,
+    )
+    visible_prop_by_id: dict[str, LocationProp] = {p.id: p for p in visible_room_props}
+    visible_props_block = ""
+    if visible_room_props:
+        prop_lines = "\n".join(
+            f"- id='{p.id}': {p.name}" + (f" — {p.note[:160]}" if p.note else "")
+            for p in visible_room_props
+        )
+        holder_options = [f"'player' ({eff_persona_name or 'Player'})"] + [
+            f"'{c.id}' ({c.name})" for c in scene_characters
+        ]
+        visible_props_block = (
+            f"\nVisible Portable Props at Current Location:\n{prop_lines}\n"
+            f"Valid Prop Holder IDs: {', '.join(holder_options)}\n"
+            "Emit claimed_props ONLY if the narrative prose clearly depicts the player or a co-present NPC picking up, pocketing, or taking one of these props.\n"
+        )
+
     active_loc_env_str = (
         ", ".join(active_location.environmental_tags)
         if active_location.environmental_tags
@@ -405,7 +432,8 @@ async def run_phase5_post_turn_clerk(
         f"Player Starting Physical State: {player_start_phys_str}\n"
         f"Current Scene Flags: {existing_flags_str}\n"
         f"Known Exits:\n{neighbor_options}\n"
-        f"{candidate_secrets_block}\n"
+        f"{candidate_secrets_block}"
+        f"{visible_props_block}\n"
         f"User Message: {completed_turn.user_message}\n"
         f"{speaker_label} Response:\n{completed_turn.raw_prose}"
     )
@@ -455,6 +483,8 @@ async def run_phase5_post_turn_clerk(
                 candidate_secrets=candidate_secrets,
                 prev_player_stance=prev_player_stance,
                 prev_player_context=prev_player_context,
+                visible_location_props=visible_room_props,
+                present_characters=scene_characters,
             )
         if on_progress:
             await on_progress(
@@ -800,6 +830,58 @@ async def run_phase5_post_turn_clerk(
         dict.fromkeys([*prior_revealed_edge_ids, *discovered_edge_pair_ids])
     )
 
+    # 2.6 Validate & arbitrate room prop claims (visible/unclaimed only, single-owner)
+    valid_holder_ids = {"player"} | {c.id for c in scene_characters}
+    validated_claimed_props: list[PropClaim] = []
+    seen_claimed_prop_ids: set[str] = set()
+    if not is_narrator_turn and visible_prop_by_id:
+        for raw_claim in world_delta.claimed_props or []:
+            pid = (raw_claim.prop_id or "").strip()
+            hid = (raw_claim.holder_id or "").strip()
+            if pid in visible_prop_by_id and hid in valid_holder_ids and pid not in seen_claimed_prop_ids:
+                seen_claimed_prop_ids.add(pid)
+                validated_claimed_props.append(PropClaim(prop_id=pid, holder_id=hid))
+
+    claimed_props_by_holder: dict[str, list[LocationProp]] = {}
+    for claim in validated_claimed_props:
+        prop_obj = visible_prop_by_id[claim.prop_id]
+        claimed_props_by_holder.setdefault(claim.holder_id, []).append(prop_obj)
+
+    if claimed_props_by_holder and char_deltas:
+        all_claimed_names = [
+            visible_prop_by_id[c.prop_id].name for c in validated_claimed_props
+        ]
+        for cid, c_delta in list(char_deltas.items()):
+            filtered_obtained = [
+                it
+                for it in (c_delta.items_obtained or [])
+                if not any(item_names_match_word_bounded(it, cname) for cname in all_claimed_names)
+            ]
+            filtered_equipped = [
+                it
+                for it in (c_delta.items_equipped or [])
+                if not any(item_names_match_word_bounded(it, cname) for cname in all_claimed_names)
+            ]
+            if (
+                len(filtered_obtained) != len(c_delta.items_obtained or [])
+                or len(filtered_equipped) != len(c_delta.items_equipped or [])
+            ):
+                char_deltas[cid] = c_delta.model_copy(
+                    update={
+                        "items_obtained": filtered_obtained,
+                        "items_equipped": filtered_equipped,
+                    }
+                )
+
+    merged_claimed_prop_ids = list(
+        dict.fromkeys(
+            [
+                *(completed_turn.world_snapshot.claimed_prop_ids or []),
+                *(c.prop_id for c in validated_claimed_props),
+            ]
+        )
+    )
+
     updated_world_snapshot = WorldStateSnapshot(
         turn_id=completed_turn.id,
         world_timestamp=new_timestamp,
@@ -810,6 +892,15 @@ async def run_phase5_post_turn_clerk(
         visited_container_ids=merged_visited_containers,
         revealed_lore_ids=merged_revealed_lore_ids,
         revealed_edge_ids=merged_revealed_edge_ids,
+        revealed_prop_ids=list(completed_turn.world_snapshot.revealed_prop_ids or []),
+        claimed_prop_ids=merged_claimed_prop_ids,
+        spawned_props=list(completed_turn.world_snapshot.spawned_props or []),
+        location_search_last_turn_depth=dict(
+            completed_turn.world_snapshot.location_search_last_turn_depth or {}
+        ),
+        auto_spawned_prop_location_ids=list(
+            completed_turn.world_snapshot.auto_spawned_prop_location_ids or []
+        ),
         parties=list(completed_turn.world_snapshot.parties or []),
     )
 
@@ -998,6 +1089,14 @@ async def run_phase5_post_turn_clerk(
                 donor_pool=donor_pool,
                 recipient_id=ch.id,
             )
+            for claimed_prop in claimed_props_by_holder.get(ch.id, ()):
+                claimed_item = claimed_prop.to_item_instance()
+                claimed_key = normalize_item_key(claimed_item.name)
+                if all(
+                    it.id != claimed_item.id and normalize_item_key(it.name) != claimed_key
+                    for it in new_inventory
+                ):
+                    new_inventory.append(claimed_item)
             next_stance, next_ctx, char_reset_reason = resolve_post_turn_physical_state(
                 prev_st.physical_stance,
                 prev_st.physical_context,
@@ -1373,10 +1472,33 @@ async def run_phase5_post_turn_clerk(
     else:
         current_player_state = PersonaTurnStateSnapshot(
             turn_id=completed_turn.id,
-            equipped=[],
-            inventory=[],
+            equipped=list(persona_snapshot.equipped) if persona_snapshot else [],
+            inventory=list(persona_snapshot.inventory) if persona_snapshot else [],
             physical_stance=resolved_player_stance,
             physical_context=resolved_player_context,
+        )
+
+    player_claimed_props = claimed_props_by_holder.get("player", [])
+    if player_claimed_props:
+        next_player_inv = list(current_player_state.inventory)
+        for claimed_prop in player_claimed_props:
+            claimed_key = normalize_item_key(claimed_prop.name)
+            if all(
+                it.id != claimed_prop.id and normalize_item_key(it.name) != claimed_key
+                for it in next_player_inv
+            ):
+                next_player_inv.append(
+                    PersonaItemInstance(
+                        id=claimed_prop.id,
+                        name=claimed_prop.name,
+                        note=claimed_prop.note,
+                        flags=list(claimed_prop.flags),
+                        is_secret=False,
+                        trigger_keywords=[claimed_prop.name.lower()],
+                    )
+                )
+        current_player_state = current_player_state.model_copy(
+            update={"inventory": next_player_inv}
         )
 
     composite_post_turn = PostTurnStateDelta(
@@ -1407,6 +1529,7 @@ async def run_phase5_post_turn_clerk(
         first_visit_media=first_visit_media,
         party_event_delta=party_event_delta,
         revealed_secret_lore_ids=newly_revealed_ids,
+        claimed_props=validated_claimed_props,
         major_event=persisted_major_event,
         player_physical_stance=resolved_player_stance,
         player_physical_context=resolved_player_context,

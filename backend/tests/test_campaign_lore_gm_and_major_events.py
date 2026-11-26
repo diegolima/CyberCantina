@@ -206,6 +206,7 @@ def test_gm_mode_default_off_partial_settings_and_403_guards(
     assert res1.json()["campaign"]["world_settings"] == {
         "describe_on_first_visit": False,
         "unlock_lore": False,
+        "auto_spawn_props_on_search_crit": False,
     }
 
     res2 = client.patch(
@@ -216,6 +217,7 @@ def test_gm_mode_default_off_partial_settings_and_403_guards(
     assert res2.json()["campaign"]["world_settings"] == {
         "describe_on_first_visit": False,
         "unlock_lore": True,
+        "auto_spawn_props_on_search_crit": False,
     }
 
 

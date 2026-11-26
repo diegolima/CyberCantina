@@ -27,6 +27,7 @@ import type {
   LocationContainer,
   LocationEdge,
   LocationNode,
+  LocationProp,
   LoreNode,
   NeighborLocationView,
 } from "./world";
@@ -45,6 +46,17 @@ export interface RecalledMemoryItem {
   score: number;
 }
 
+export type PropTier = "clue" | "mundane_tool" | "minor_consumable" | "improvised_aid";
+
+export interface SpawnedLocationProp extends LocationProp {
+  location_id: string;
+}
+
+export interface PropClaim {
+  prop_id: string;
+  holder_id: string;
+}
+
 export interface WorldStateSnapshot {
   turn_id: string;
   world_timestamp: string;
@@ -55,12 +67,18 @@ export interface WorldStateSnapshot {
   visited_container_ids?: string[];
   revealed_lore_ids?: string[];
   revealed_edge_ids?: string[];
+  revealed_prop_ids?: string[];
+  claimed_prop_ids?: string[];
+  spawned_props?: SpawnedLocationProp[];
+  location_search_last_turn_depth?: Record<string, number>;
+  auto_spawned_prop_location_ids?: string[];
   parties?: PartyRecord[];
 }
 
 export interface CampaignWorldSettings {
   describe_on_first_visit: boolean;
   unlock_lore?: boolean;
+  auto_spawn_props_on_search_crit?: boolean;
 }
 
 export interface MajorEventRecord {
@@ -164,6 +182,7 @@ export interface WorldPostTurnDelta {
   notable_event_summary?: string | null;
   scene_flags_updated: string[];
   scene_flags_removed: string[];
+  claimed_props?: PropClaim[];
   player_physical_stance?: PhysicalStance;
   player_physical_context?: string;
 }
@@ -200,6 +219,7 @@ export interface PostTurnStateDelta {
   first_visit_media?: FirstVisitMediaItem[];
   party_event_delta?: PartyEventDelta | null;
   revealed_secret_lore_ids?: string[];
+  claimed_props?: PropClaim[];
   major_event?: MajorEventRecord | null;
   player_physical_stance?: PhysicalStance | null;
   player_physical_context?: string | null;
@@ -345,6 +365,7 @@ export type SlashCommandId =
   | "look"
   | "narrate"
   | "party"
+  | "search"
   | "wait";
 
 export type PartySubcommandId = "disband" | "invite" | "kick" | "leave";
@@ -357,6 +378,7 @@ export type SlashCommandIconKey =
   | "eye"
   | "sparkles"
   | "users"
+  | "search"
   | "clock";
 
 export type SlashCommandAccent = "emerald" | "amber" | "cyan" | "violet";
@@ -446,6 +468,8 @@ export interface TurnSubmitOptions {
   character_choices?: Record<string, CharacterChoiceSet>;
   whispers?: CharacterWhisper[];
   party_action?: PartyActionSpec | null;
+  search_action?: boolean;
+  search_focus?: string | null;
 }
 
 export type MentionTargetScope = "local" | "remote";
@@ -606,6 +630,8 @@ export interface CampaignTurnSendOptions {
   durationMinutes?: number | null;
   characterChoices?: Record<string, CharacterChoiceSet>;
   partyAction?: PartyActionSpec | null;
+  searchAction?: boolean;
+  searchFocus?: string | null;
 }
 
 export interface CampaignStreamError {

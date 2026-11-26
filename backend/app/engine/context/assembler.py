@@ -27,6 +27,7 @@ from app.schemas.turn import (
 )
 from app.schemas.world import (
     LocationNode,
+    LocationProp,
     NeighborLocationView,
     WorldRecord,
 )
@@ -253,6 +254,9 @@ def assemble_four_zone_messages(
     active_parties: list[PartyRecord] | None = None,
     budget_report_out: list[Phase4BudgetReport] | None = None,
     newly_discovered_edge_ids: set[str] | None = None,
+    visible_location_props: list[LocationProp] | None = None,
+    newly_revealed_prop_ids: set[str] | None = None,
+    newly_spawned_prop_ids: set[str] | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     eff_is_solo = bool(
@@ -391,6 +395,9 @@ def assemble_four_zone_messages(
             else list(leaf_turn.world_snapshot.parties or [])
         ),
         newly_discovered_edge_ids=newly_discovered_edge_ids,
+        visible_location_props=visible_location_props,
+        newly_revealed_prop_ids=newly_revealed_prop_ids,
+        newly_spawned_prop_ids=newly_spawned_prop_ids,
     )
     zone4_msg = {"role": "user", "content": zone4_content}
 

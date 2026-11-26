@@ -393,6 +393,10 @@ class CampaignMapUpdateMixin:
                         (campaign.world_id, del_lid, del_lid),
                     )
                     conn.execute(
+                        "DELETE FROM location_props WHERE location_id = ? AND campaign_id = ?",
+                        (del_lid, campaign_id),
+                    )
+                    conn.execute(
                         "DELETE FROM location_nodes WHERE id = ? AND created_at_turn_id = ?",
                         (del_lid, leaf_turn_id),
                     )
@@ -442,6 +446,30 @@ class CampaignMapUpdateMixin:
                             nloc.icon,
                         ),
                     )
+                    for p_idx, prop in enumerate(getattr(nloc, "props", None) or []):
+                        if not gm_unlocked and prop.is_hidden:
+                            continue
+                        prop_id = prop.id if prop.id and not prop.id.startswith("new_") else f"prop_{uuid.uuid4().hex[:10]}"
+                        conn.execute(
+                            """
+                            INSERT INTO location_props (
+                                id, world_id, location_id, campaign_id, name, note, flags_json, lore_id, is_hidden, sort_order
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                prop_id,
+                                campaign.world_id,
+                                nloc.id,
+                                campaign_id,
+                                prop.name,
+                                prop.note,
+                                json.dumps(list(prop.flags)),
+                                prop.lore_id,
+                                1 if prop.is_hidden else 0,
+                                p_idx,
+                            ),
+                        )
                 else:
                     orig_loc = orig_locs[nloc.id]
                     changed = (
@@ -698,6 +726,19 @@ class CampaignMapUpdateMixin:
                 world_id=campaign.world_id,
                 remapped_edges=remapped_revealed_edges,
             )
+            if gm_unlocked:
+                for nloc in new_locs:
+                    if nloc.id in orig_locs:
+                        orig_loc = orig_locs[nloc.id]
+                        if list(getattr(nloc, "props", None) or []) != list(getattr(orig_loc, "props", None) or []):
+                            self._apply_location_props_diff_to_snapshot_conn(
+                                conn,
+                                leaf_turn_id=leaf_turn_id,
+                                location_id=nloc.id,
+                                base_props=list(getattr(orig_loc, "props", None) or []),
+                                next_props=list(getattr(nloc, "props", None) or []),
+                                world_id=campaign.world_id,
+                            )
 
             conn.commit()
         except Exception:

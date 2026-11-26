@@ -128,6 +128,9 @@ export interface PreTurnAnalysis {
   choice_resolutions?: Record<string, ChoiceResolution>;
   dice_mode_promoted?: boolean;
   party_action?: PartyActionSpec | null;
+  is_search_action?: boolean;
+  search_focus?: string | null;
+  roll_was_pinned?: boolean;
 }
 
 export type MechanicsSubcategoryId =

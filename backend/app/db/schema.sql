@@ -173,6 +173,22 @@ CREATE TABLE IF NOT EXISTS location_nodes (
 CREATE INDEX IF NOT EXISTS idx_location_nodes_world ON location_nodes(world_id);
 CREATE INDEX IF NOT EXISTS idx_location_nodes_container ON location_nodes(world_id, container_id);
 
+CREATE TABLE IF NOT EXISTS location_props (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    location_id TEXT NOT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+    campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    name TEXT NOT NULL CHECK(length(trim(name)) >= 1),
+    note TEXT NOT NULL DEFAULT '',
+    flags_json TEXT NOT NULL DEFAULT '[]',
+    lore_id TEXT NULL,
+    is_hidden INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_location_props_world_loc ON location_props(world_id, location_id);
+CREATE INDEX IF NOT EXISTS idx_location_props_loc_camp ON location_props(location_id, campaign_id);
+
 CREATE TABLE IF NOT EXISTS location_edges (
     id TEXT PRIMARY KEY,
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
@@ -283,7 +299,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     persona_snapshot_json TEXT NULL,
     active_leaf_turn_id TEXT NULL,
     prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL,
-    world_settings_json TEXT NOT NULL DEFAULT '{"describe_on_first_visit": true, "unlock_lore": false}',
+    world_settings_json TEXT NOT NULL DEFAULT '{"describe_on_first_visit": true, "unlock_lore": false, "auto_spawn_props_on_search_crit": false}',
     created_at TEXT NOT NULL
 );
 
@@ -386,6 +402,11 @@ CREATE TABLE IF NOT EXISTS world_state_snapshots (
     visited_container_ids_json TEXT NOT NULL DEFAULT '[]',
     revealed_lore_ids_json TEXT NOT NULL DEFAULT '[]',
     revealed_edge_ids_json TEXT NOT NULL DEFAULT '[]',
+    revealed_prop_ids_json TEXT NOT NULL DEFAULT '[]',
+    claimed_prop_ids_json TEXT NOT NULL DEFAULT '[]',
+    spawned_props_json TEXT NOT NULL DEFAULT '[]',
+    location_search_last_turn_depth_json TEXT NOT NULL DEFAULT '{}',
+    auto_spawned_prop_location_ids_json TEXT NOT NULL DEFAULT '[]',
     parties_json TEXT NOT NULL DEFAULT '[]'
 );
 

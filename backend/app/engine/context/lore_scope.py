@@ -26,6 +26,7 @@ from app.schemas.turn import (
 from app.schemas.world import (
     LocationContainer,
     LocationNode,
+    LocationProp,
     LoreNode,
     NeighborLocationView,
     WorldRecord,
@@ -574,7 +575,7 @@ def _select_scoped_lore_for_turn(
             f"{r.action_description} {r.skill_or_approach}" for r in succeeding_rolls
         ).lower()
         combined_roll_context = f"{roll_signal_lower} {(user_message or '').lower()}"
-        has_discovery_roll_success = any(
+        has_discovery_roll_success = bool(pre_turn and pre_turn.is_search_action) or any(
             stem in combined_roll_context for stem in _DISCOVERY_CHECK_STEMS
         )
 
@@ -685,7 +686,7 @@ def select_newly_discovered_secret_edges(
             f"{r.action_description} {r.skill_or_approach}" for r in succeeding_rolls
         ).lower()
         combined_roll_context = f"{roll_signal_lower} {user_lower}"
-        has_discovery_roll_success = any(
+        has_discovery_roll_success = bool(pre_turn and pre_turn.is_search_action) or any(
             stem in combined_roll_context for stem in _DISCOVERY_CHECK_STEMS
         )
 
@@ -717,6 +718,53 @@ def select_newly_discovered_secret_edges(
                 discovered.append(nb)
 
     return discovered
+
+
+def select_newly_discovered_hidden_props(
+    unrevealed_hidden_props: Sequence[LocationProp],
+    *,
+    user_message: str = "",
+    pre_turn: PreTurnAnalysis | None = None,
+) -> list[LocationProp]:
+    """Unlock hidden LocationProps on Clean/Critical Success from /search or freeform discovery rolls."""
+    if not unrevealed_hidden_props or pre_turn is None:
+        return []
+
+    all_rolls = []
+    if pre_turn.character_rolls:
+        all_rolls.extend(pre_turn.character_rolls.values())
+    elif pre_turn.resolved_roll is not None:
+        all_rolls.append(pre_turn.resolved_roll)
+
+    if not all_rolls:
+        return []
+
+    succeeding_rolls = [
+        r for r in all_rolls if r.outcome_tier in ("Clean Success", "Critical Success")
+    ]
+    if not succeeding_rolls:
+        return []
+
+    if pre_turn.is_search_action:
+        return list(unrevealed_hidden_props)
+
+    user_lower = (user_message or "").lower()
+    roll_signal_lower = " ".join(
+        f"{r.action_description} {r.skill_or_approach}" for r in succeeding_rolls
+    ).lower()
+    combined_roll_context = f"{roll_signal_lower} {user_lower}"
+    has_discovery_roll_success = any(
+        stem in combined_roll_context for stem in _DISCOVERY_CHECK_STEMS
+    )
+    if has_discovery_roll_success:
+        return list(unrevealed_hidden_props)
+
+    matched: list[LocationProp] = []
+    for prop in unrevealed_hidden_props:
+        prop_tokens = [t for t in _WORD_TOKEN_RE.findall(prop.name.lower()) if len(t) >= 4]
+        if any(_tag_matches_text(tok, combined_roll_context) for tok in prop_tokens):
+            matched.append(prop)
+    return matched
 
 
 def select_active_location_lore_for_turn(

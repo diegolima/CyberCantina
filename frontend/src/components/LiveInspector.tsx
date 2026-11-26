@@ -17,6 +17,7 @@ import {
   LocationLoreNodeDraft,
   LocationNode,
   LocationOverrideOptions,
+  LocationProp,
   MechanicsTopicId,
   NeighborLocationView,
   PhysicalStateOverridePayload,
@@ -103,6 +104,18 @@ interface LiveInspectorProps {
     edgeId: string,
     revealed: boolean
   ) => Promise<void> | void;
+  onSaveCampaignLocationProps?: (
+    locationId: string,
+    props: LocationProp[]
+  ) => Promise<void> | void;
+  onToggleCampaignPropReveal?: (
+    propId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
+  onTransferCampaignProp?: (
+    propId: string,
+    holderId: string
+  ) => Promise<void> | void;
   onOpenWorldSheet?: () => void;
   onOpenCharacterInCodex?: (characterId: string) => void;
   onOpenPersonaInCodex?: (personaId: string) => void;
@@ -127,6 +140,9 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onSaveCampaignContainerLore,
   onToggleCampaignLoreReveal,
   onToggleCampaignEdgeReveal,
+  onSaveCampaignLocationProps,
+  onToggleCampaignPropReveal,
+  onTransferCampaignProp,
   onOpenWorldSheet,
   onOpenCharacterInCodex,
   onOpenPersonaInCodex,
@@ -198,6 +214,29 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     }
     return map;
   }, [characterRows, activeLoc.id]);
+
+  const worldArtifactLore = useMemo(
+    () =>
+      (bundle.world_lore_nodes ?? world.lore_nodes ?? []).filter(
+        (ln) => ln.category === "artifact"
+      ),
+    [bundle.world_lore_nodes, world.lore_nodes]
+  );
+
+  const propTransferTargets = useMemo(() => {
+    const playerLabel = bundle.campaign.persona_snapshot?.name
+      ? `Player (${bundle.campaign.persona_snapshot.name})`
+      : "Player";
+    return [
+      { id: "player", label: playerLabel },
+      ...characterRows.map((row) => ({
+        id: row.record.id,
+        label: row.isPresent
+          ? row.record.name
+          : `${row.record.name} (${row.elsewhereLocationName || "Elsewhere"})`,
+      })),
+    ];
+  }, [bundle.campaign.persona_snapshot?.name, characterRows]);
 
   const effectiveContainers = useMemo(
     () => bundle.containers ?? world.containers ?? [],
@@ -451,6 +490,12 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                 onToggleLoreReveal={onToggleCampaignLoreReveal}
                 revealedEdgeIds={bundle.current_world_snapshot.revealed_edge_ids ?? []}
                 onToggleEdgeReveal={onToggleCampaignEdgeReveal}
+                revealedPropIds={bundle.current_world_snapshot.revealed_prop_ids ?? []}
+                worldArtifactLore={worldArtifactLore}
+                propTransferTargets={propTransferTargets}
+                onSaveCampaignLocationProps={onSaveCampaignLocationProps}
+                onTogglePropReveal={onToggleCampaignPropReveal}
+                onTransferProp={onTransferCampaignProp}
                 isMutatingLocked={isMutatingLocked}
                 visitedContainerIds={bundle.current_world_snapshot.visited_container_ids ?? []}
                 onOpenMechanicsHelp={

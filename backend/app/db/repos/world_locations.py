@@ -261,6 +261,11 @@ class WorldLocationsMixin:
                 campaign_id=campaign_id,
                 valid_turn_ids=valid_turn_ids,
             ).get(location_id, [])
+            loc.props = self._resolve_location_props_map(
+                conn,
+                [location_id],
+                campaign_id=campaign_id,
+            ).get(location_id, [])
             if loc.image_media_id:
                 m_row = conn.execute(
                     "SELECT * FROM media_assets WHERE id = ?",

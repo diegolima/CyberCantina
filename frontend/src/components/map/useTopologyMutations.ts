@@ -410,6 +410,7 @@ export function useTopologyMutations({
           is_starting_location: false,
           is_hub: false,
           is_visited: false,
+          props: [],
           icon: inferMapIconKey({
             kind: "location",
             name: `${newCont.name} Entrance`,
@@ -491,6 +492,7 @@ export function useTopologyMutations({
         is_starting_location: false,
         is_hub: isHub,
         is_visited: false,
+        props: [],
         ui_x: Math.round(x),
         ui_y: Math.round(y),
         icon: getDefaultMapIconKey(isHub ? "hub" : "location"),
@@ -869,6 +871,7 @@ export function useTopologyMutations({
         is_starting_location: false,
         is_hub: true,
         is_visited: false,
+        props: [],
         ui_x: st.x,
         ui_y: st.y,
         icon: getDefaultMapIconKey("hub"),
@@ -1140,6 +1143,7 @@ export function useTopologyMutations({
           is_starting_location: false,
           is_hub: false,
           is_visited: false,
+          props: [],
           icon: inferMapIconKey({
             kind: "location",
             name: `${opts.name} Entrance`,
@@ -1186,6 +1190,7 @@ export function useTopologyMutations({
         is_starting_location: false,
         is_hub: isHub,
         is_visited: false,
+        props: [],
         ui_x: Math.round(st.dropX),
         ui_y: Math.round(st.dropY),
         icon: inferMapIconKey({

@@ -5,12 +5,18 @@ from __future__ import annotations
 import json
 import math
 import re
+import uuid
 from collections.abc import Iterable, Sequence
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.character import sanitize_character_markup
+from app.schemas.character import (
+    VALID_ITEM_FLAGS,
+    ItemFlag,
+    ItemInstance,
+    sanitize_character_markup,
+)
 from app.schemas.unsupported import sanitize_unsupported_fields_dict
 
 WALKING_METERS_PER_MINUTE: Final[int] = 70
@@ -606,6 +612,10 @@ class WorldGlobalRules(BaseModel):
         default=True,
         description="Default campaign setting: display cosmetic atmospheric description cards on first entry to unvisited locations/containers.",
     )
+    auto_spawn_props_on_search_crit: bool = Field(
+        default=False,
+        description="Default campaign setting: allow Critical Success on /search to materialize a bounded situational prop in empty locations (max once per location).",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -807,6 +817,10 @@ class LocationNodeDraft(BaseModel):
     lore_nodes: list[LocationLoreNodeDraft] = Field(
         default_factory=list,
         description="User-authored location lore entries preserved across wizard review -> commit.",
+    )
+    props: list[LocationProp] = Field(
+        default_factory=list,
+        description="User-authored portable location props preserved across wizard review -> commit.",
     )
 
 
@@ -1201,6 +1215,91 @@ class LocationContainer(BaseModel):
         return self
 
 
+class LocationProp(BaseModel):
+    """Tracked portable prop attached to a Level 0 location (excluded from Codex and RAG)."""
+
+    id: str = Field(
+        default="",
+        description="Stable unique prop identifier (auto-generated as prop_<hex> when omitted).",
+    )
+    name: str = Field(..., min_length=1, max_length=160)
+    note: str = Field(
+        default="",
+        max_length=300,
+        description="Brief item description, sensory clue, or usage hint.",
+    )
+    flags: list[ItemFlag] = Field(default_factory=list)
+    lore_id: str | None = Field(
+        default=None,
+        description="Optional linked World 'artifact' LoreNode ID.",
+    )
+    is_hidden: bool = Field(
+        default=False,
+        description="Whether this prop starts concealed until uncovered via /search, discovery roll, or GM reveal.",
+    )
+    auto_spawned: bool = Field(
+        default=False,
+        description="True when generated dynamically on a /search Critical Success.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_raw_prop(cls, data: Any) -> Any:
+        if isinstance(data, cls):
+            return data
+        if isinstance(data, dict):
+            raw_name = sanitize_character_markup(str(data.get("name") or "").strip(), single_line=True)
+            clean_name = re.sub(r"\s+", " ", raw_name).strip()[:160]
+            raw_note = sanitize_character_markup(str(data.get("note") or "").strip(), single_line=True)
+            clean_note = re.sub(r"\s+", " ", raw_note).strip()[:300]
+            raw_id = str(data.get("id") or "").strip()
+            raw_lore = str(data.get("lore_id") or "").strip() or None
+            raw_flags = data.get("flags") if isinstance(data.get("flags"), list) else []
+            dedup_flags: list[str] = []
+            for flag in raw_flags:
+                if isinstance(flag, str):
+                    fc = flag.strip().lower()
+                    if fc in VALID_ITEM_FLAGS and fc not in dedup_flags:
+                        dedup_flags.append(fc)
+            return {
+                **data,
+                "id": raw_id,
+                "name": clean_name,
+                "note": clean_note,
+                "flags": dedup_flags,
+                "lore_id": raw_lore,
+                "is_hidden": bool(data.get("is_hidden", False)),
+                "auto_spawned": bool(data.get("auto_spawned", False)),
+            }
+        return data
+
+    @model_validator(mode="after")
+    def _normalize_prop_invariants(self) -> "LocationProp":
+        if not self.id or not self.id.strip():
+            self.id = f"prop_{uuid.uuid4().hex[:10]}"
+        self.lore_id = (self.lore_id or "").strip() or None
+        dedup: list[ItemFlag] = []
+        for f in self.flags:
+            if f in VALID_ITEM_FLAGS and f not in dedup:
+                dedup.append(f)
+        if self.lore_id and "artifact" not in dedup:
+            dedup.append("artifact")
+        elif not self.lore_id and "artifact" in dedup:
+            dedup = [f for f in dedup if f != "artifact"]
+        self.flags = dedup
+        return self
+
+    def to_item_instance(self) -> ItemInstance:
+        """Losslessly convert this tracked location prop into a character/persona inventory ItemInstance."""
+        return ItemInstance(
+            id=self.id,
+            name=self.name,
+            note=self.note,
+            flags=list(self.flags),
+            lore_id=self.lore_id,
+        )
+
+
 class LocationNode(BaseModel):
     """Persisted spatial graph node."""
 
@@ -1230,6 +1329,7 @@ class LocationNode(BaseModel):
     video_mime_type: str | None = None
     is_visited: bool = False
     lore_nodes: list[LoreNode] = Field(default_factory=list)
+    props: list[LocationProp] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -1473,6 +1573,7 @@ CANONICAL_WORLD_GLOBAL_RULE_KEYS: frozenset[str] = frozenset(
         "tech_or_magic_rules",
         "starting_timestamp",
         "describe_on_first_visit",
+        "auto_spawn_props_on_search_crit",
     }
 )
 LEGACY_DEPRECATED_WORLD_GLOBAL_RULE_KEYS: frozenset[str] = frozenset(
@@ -1550,6 +1651,18 @@ CANONICAL_LOCATION_KEYS: frozenset[str] = frozenset(
         "video_mime_type",
         "is_visited",
         "lore_nodes",
+        "props",
+    }
+)
+CANONICAL_LOCATION_PROP_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "name",
+        "note",
+        "flags",
+        "lore_id",
+        "is_hidden",
+        "auto_spawned",
     }
 )
 CANONICAL_EDGE_KEYS: frozenset[str] = frozenset(
@@ -1683,6 +1796,7 @@ def find_nested_world_unsupported_keys(raw_world_dict: dict[str, Any]) -> list[s
     for loc in raw_world_dict.get("locations") or []:
         if isinstance(loc, dict):
             _scan(loc.get("lore_nodes"), "locations.lore_nodes", CANONICAL_LORE_KEYS)
+            _scan(loc.get("props"), "locations.props", CANONICAL_LOCATION_PROP_KEYS)
     return found
 
 
@@ -1726,3 +1840,9 @@ class CampaignContainerLoreUpdatePayload(BaseModel):
     """Atomic Copy-on-Write Level 1 container lore replacement payload during an active campaign."""
 
     lore_nodes: list[LocationLoreNodeDraft] = Field(default_factory=list)
+
+
+class CampaignLocationPropsUpdatePayload(BaseModel):
+    """Atomic Copy-on-Write Level 0 location props replacement payload during an active campaign (GM Mode)."""
+
+    props: list[LocationProp] = Field(default_factory=list)

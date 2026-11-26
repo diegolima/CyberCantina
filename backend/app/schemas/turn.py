@@ -61,6 +61,7 @@ from app.schemas.world import (
     LocationContainer,
     LocationEdge,
     LocationNode,
+    LocationProp,
     LoreNode,
     NeighborLocationView,
     normalize_compass_direction,
@@ -132,7 +133,37 @@ ChoiceComplianceOutcome = Literal[
 ]
 
 DEFAULT_GATE_DC: Final[int] = 12
+SEARCH_COOLDOWN_TURNS: Final[int] = 5
 MAX_CHOICE_LABEL_LENGTH: Final[int] = 80
+
+PropTier = Literal["clue", "mundane_tool", "minor_consumable", "improvised_aid"]
+
+
+class SpawnedLocationProp(LocationProp):
+    """Runtime location prop created on a branch (via /search Crit auto-spawn or GM Mode)."""
+
+    location_id: str
+
+
+class PropClaim(BaseModel):
+    """Explicit room prop pickup claim emitted by Phase 5 World Clerk."""
+
+    model_config = ConfigDict(
+        json_schema_extra=lambda schema: schema.update(
+            required=list(schema.get("properties", {}).keys())
+        )
+    )
+
+    prop_id: str = Field(
+        ...,
+        min_length=1,
+        description="Exact ID of the visible, unclaimed prop in the active location that was picked up.",
+    )
+    holder_id: str = Field(
+        ...,
+        min_length=1,
+        description="'player' if the player character picked up the prop, or the co-present NPC character_id.",
+    )
 MAX_CHOICE_OPTIONS: Final[int] = 6
 
 
@@ -314,6 +345,9 @@ class PreTurnAnalysis(PreTurnLLMOutput):
     character_choices: dict[str, CharacterChoiceSet] = Field(default_factory=dict)
     choice_resolutions: dict[str, ChoiceResolution] = Field(default_factory=dict)
     dice_mode_promoted: bool = False
+    is_search_action: bool = False
+    search_focus: str | None = None
+    roll_was_pinned: bool = False
     party_action: PartyActionSpec | None = None
 
     @model_validator(mode="before")
@@ -360,7 +394,7 @@ class PreTurnAnalysis(PreTurnLLMOutput):
                 self.resolved_roll = self.character_rolls[self.active_speaker_id]
             else:
                 self.resolved_roll = next(iter(self.character_rolls.values()))
-        elif not self.character_rolls and self.active_speaker_id != "__solo__":
+        elif not self.character_rolls and self.active_speaker_id != "__solo__" and not self.is_search_action:
             self.resolved_roll = None
         return self
 
@@ -398,6 +432,11 @@ class WorldStateSnapshot(BaseModel):
     visited_container_ids: list[str] = Field(default_factory=list)
     revealed_lore_ids: list[str] = Field(default_factory=list)
     revealed_edge_ids: list[str] = Field(default_factory=list)
+    revealed_prop_ids: list[str] = Field(default_factory=list)
+    claimed_prop_ids: list[str] = Field(default_factory=list)
+    spawned_props: list[SpawnedLocationProp] = Field(default_factory=list)
+    location_search_last_turn_depth: dict[str, int] = Field(default_factory=dict)
+    auto_spawned_prop_location_ids: list[str] = Field(default_factory=list)
     parties: list[PartyRecord] = Field(default_factory=list)
 
 
@@ -406,6 +445,7 @@ class CampaignWorldSettings(BaseModel):
 
     describe_on_first_visit: bool = True
     unlock_lore: bool = False
+    auto_spawn_props_on_search_crit: bool = False
 
 
 class FirstVisitDescriptionCard(BaseModel):
@@ -648,6 +688,13 @@ class WorldPostTurnDelta(BaseModel):
         description=(
             "Exact IDs from the candidate unrevealed location/container secrets whose substance was "
             "actually disclosed, discovered, or witnessed in public turn prose. Empty list otherwise."
+        ),
+    )
+    claimed_props: list[PropClaim] = Field(
+        default_factory=list,
+        description=(
+            "Explicit room prop pickups matching visible, unclaimed props at the active location "
+            "with holder_id set to 'player' or a co-present character_id. Empty list if none picked up."
         ),
     )
     major_event: MajorEventSpec | None = Field(
@@ -1049,6 +1096,10 @@ class PostTurnStateDelta(BaseModel):
         default_factory=list,
         description="Secret lore IDs newly disclosed in public narrative prose during this turn.",
     )
+    claimed_props: list[PropClaim] = Field(
+        default_factory=list,
+        description="Room props picked up and transferred into Player or NPC inventory during this turn.",
+    )
     major_event: MajorEventRecord | None = Field(
         default=None,
         description="Structured world-changing or location-changing Major Event logged during Phase 5.",
@@ -1365,6 +1416,15 @@ class TurnSubmitRequest(BaseModel):
     party_action: PartyActionSpec | None = Field(
         default=None,
         description="Explicit party management action (/party slash command or Party Modal control).",
+    )
+    search_action: bool = Field(
+        default=False,
+        description="True when submitting a /search room inspection turn (forces DC 12 Perception/Investigation roll).",
+    )
+    search_focus: str | None = Field(
+        default=None,
+        max_length=240,
+        description="Optional focus target supplied to /search (e.g., 'behind the counter').",
     )
 
     @field_validator("narrative_mode", mode="before")

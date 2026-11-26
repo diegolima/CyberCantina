@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Radio,
   RefreshCw,
+  Search,
   Send,
   Signpost,
   Sparkles,
@@ -166,6 +167,9 @@ export interface ChatComposerProps {
   handleRemoveMentionChip: (charName: string) => void;
   checkAndTriggerMention: (newText: string, cursorOffset?: number) => void;
   handleInvokeNarrator: (mode: NarrativeMode, customText?: string, elapsedMinutes?: number) => void;
+  handleInvokeSearch?: (focus?: string) => void;
+  searchCooldownRemaining?: number;
+  isGmMode?: boolean;
   handleQuickExit: (nb: NeighborLocationView) => void;
   handleSendCustomDirective: () => void;
   handleClearAllChoices: () => void;
@@ -248,6 +252,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   handleRemoveMentionChip,
   checkAndTriggerMention,
   handleInvokeNarrator,
+  handleInvokeSearch,
+  searchCooldownRemaining = 0,
+  isGmMode = false,
   handleQuickExit,
   handleSendCustomDirective,
   handleClearAllChoices,
@@ -1095,6 +1102,38 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Dedicated Room Search Button */}
+              {handleInvokeSearch && (
+                <button
+                  type="button"
+                  aria-label="Search Room"
+                  className="btn composer-action-btn"
+                  disabled={
+                    isBusy ||
+                    Boolean(editingTurn) ||
+                    searchCooldownRemaining > 0
+                  }
+                  onClick={() => handleInvokeSearch()}
+                  title={
+                    searchCooldownRemaining > 0
+                      ? `Search on cooldown in this room (${searchCooldownRemaining} turn${
+                          searchCooldownRemaining === 1 ? "" : "s"
+                        } remaining)`
+                      : isGmMode
+                      ? "Search the current room for hidden props & secrets [/search] (GM Mode bypasses cooldown)"
+                      : "Search the current room for hidden props & secrets (DC 12) [/search]"
+                  }
+                >
+                  <Search size={12} color="var(--accent-amber)" />
+                  <span className="composer-action-label">Search</span>
+                  {searchCooldownRemaining > 0 && (
+                    <span className="composer-count-badge composer-count-badge--muted">
+                      {searchCooldownRemaining}t
+                    </span>
+                  )}
+                </button>
+              )}
 
               {/* Quick Exits Dropdown Trigger & Popover */}
               <div className="composer-popover-anchor">

@@ -30,15 +30,21 @@ from app.engine.parties import (
     synthesize_party_action_message,
     validate_party_action,
 )
+from app.db.repos.turns import resolve_effective_location_props
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import (
     assemble_four_zone_messages,
     resolve_actor_context_ceiling,
     resolve_character_previous_state,
     resolve_phase2_turn_context,
+    select_newly_discovered_hidden_props,
     select_newly_discovered_secret_edges,
 )
-from app.schemas.world import is_edge_revealed
+from app.engine.prop_spawn import (
+    generate_crit_auto_spawn_prop,
+    is_crit_auto_spawn_eligible,
+)
+from app.schemas.world import LocationProp, is_edge_revealed
 from app.engine.phase3_cognition import run_phase3_multi_cognition
 from app.engine.phase4_prose import stream_phase4_prose
 from app.engine.phase5_clerk import run_phase5_post_turn_clerk
@@ -60,12 +66,14 @@ from app.schemas.persona import (
     PersonaTurnStateSnapshot,
 )
 from app.schemas.turn import (
+    SEARCH_COOLDOWN_TURNS,
     CampaignStateBundle,
     MechanicsTrigger,
     Phase3ProgressEvent,
     Phase5ProgressEvent,
     PreTurnAnalysis,
     RecalledMemoryItem,
+    SpawnedLocationProp,
     TurnSubmitRequest,
     WorldStateSnapshot,
 )
@@ -327,6 +335,19 @@ async def _execute_turn_stream_events_unlocked(
     effective_prompts = repo.resolve_effective_prompts(user_id=owner_id, campaign_id=campaign.id)
 
     effective_user_message = req.user_message.strip()
+    is_search_action = bool(req.search_action)
+    search_focus = (
+        req.search_focus.strip()[:240]
+        if (req.search_focus and req.search_focus.strip())
+        else None
+    )
+    _search_slash_re = re.compile(r"^/(?:search|investigate|inspect)(?:\s+(.*))?$", re.IGNORECASE)
+    if not is_search_action and req.narrative_mode == "standard" and effective_user_message:
+        search_m = _search_slash_re.match(effective_user_message)
+        if search_m:
+            is_search_action = True
+            if not search_focus and search_m.group(1) and search_m.group(1).strip():
+                search_focus = search_m.group(1).strip()[:240]
 
     applied_choices = dict(req.character_choices)
 
@@ -372,11 +393,27 @@ async def _execute_turn_stream_events_unlocked(
 
     is_narrator = req.narrative_mode in ("describe", "advance", "complication", "custom")
     is_solo = (not is_narrator) and (len(present_characters) == 0)
+    if is_search_action and is_narrator:
+        raise HTTPException(
+            status_code=422,
+            detail="/search cannot be executed in narrator modes.",
+        )
     if applied_choices and is_narrator:
         raise HTTPException(
             status_code=422,
             detail="Director choices cannot be applied in narrator modes.",
         )
+
+    next_depth = parent_turn.depth_index + 1
+    prior_search_depths = dict(parent_turn.world_snapshot.location_search_last_turn_depth or {})
+    if is_search_action and not campaign.world_settings.unlock_lore:
+        last_search_depth = prior_search_depths.get(active_location.id)
+        if last_search_depth is not None and (next_depth - last_search_depth) < SEARCH_COOLDOWN_TURNS:
+            remaining_cd = SEARCH_COOLDOWN_TURNS - (next_depth - last_search_depth)
+            raise HTTPException(
+                status_code=409,
+                detail=f"Search is on cooldown in this room ({remaining_cd} turn{'s' if remaining_cd != 1 else ''} remaining).",
+            )
 
     from app.engine.choices import DIRECTOR_CONTINUE_MESSAGE, filter_choices_to_present
 
@@ -453,6 +490,14 @@ async def _execute_turn_stream_events_unlocked(
         )
         message_is_synthetic = True
         is_solo = False
+
+    if is_search_action and (not effective_user_message or _search_slash_re.match(effective_user_message)):
+        effective_user_message = (
+            f"I carefully search around {search_focus}."
+            if search_focus
+            else f"I carefully search {active_location.name}."
+        )
+        message_is_synthetic = True
 
     if not effective_user_message:
         if applied_choices:
@@ -560,6 +605,8 @@ async def _execute_turn_stream_events_unlocked(
             disclosure_detection_mode=eff_disclosure_mode,
             decomposed_message=decomposed_msg,
             party_action=effective_party_action,
+            is_search_action=is_search_action,
+            search_focus=search_focus,
         )
         character = primary_character
         actor_id = "__solo__"
@@ -593,6 +640,8 @@ async def _execute_turn_stream_events_unlocked(
             disclosure_detection_mode=eff_disclosure_mode,
             decomposed_message=decomposed_msg,
             party_action=effective_party_action,
+            is_search_action=is_search_action,
+            search_focus=search_focus,
         )
         # Resolve active speaker selected by Phase 1 from characters present in the room
         character = (
@@ -634,6 +683,66 @@ async def _execute_turn_stream_events_unlocked(
         )
     else:
         initial_revealed_edge_ids = prior_revealed_edge_ids
+
+    # Resolve tracked location props, discovery reveals, and pre-Phase-4 Crit auto-spawn
+    effective_unclaimed_props = resolve_effective_location_props(
+        active_location,
+        parent_turn.world_snapshot,
+        include_hidden=True,
+    )
+    unrevealed_hidden_props = [p for p in effective_unclaimed_props if p.is_hidden]
+    newly_revealed_props = select_newly_discovered_hidden_props(
+        unrevealed_hidden_props,
+        user_message=effective_user_message,
+        pre_turn=pre_turn,
+    )
+    newly_revealed_prop_ids = {p.id for p in newly_revealed_props}
+    initial_revealed_prop_ids = list(
+        dict.fromkeys([*(parent_turn.world_snapshot.revealed_prop_ids or []), *newly_revealed_prop_ids])
+    )
+    initial_spawned_props = list(parent_turn.world_snapshot.spawned_props or [])
+    initial_auto_spawned_locs = list(parent_turn.world_snapshot.auto_spawned_prop_location_ids or [])
+    newly_spawned_prop_ids: set[str] = set()
+    spawned_crit_prop: SpawnedLocationProp | None = None
+    if is_crit_auto_spawn_eligible(
+        world_settings=campaign.world_settings,
+        pre_turn=pre_turn,
+        effective_unclaimed_props=effective_unclaimed_props,
+        world_snapshot=parent_turn.world_snapshot,
+        active_location_id=active_location.id,
+    ):
+        spawned_crit_prop = await generate_crit_auto_spawn_prop(
+            active_location=active_location,
+            world=world,
+            recent_turns=branch_turns,
+            search_focus=search_focus,
+            profile=eff_clerk,
+        )
+        initial_spawned_props.append(spawned_crit_prop)
+        initial_auto_spawned_locs = list(dict.fromkeys([*initial_auto_spawned_locs, active_location.id]))
+        newly_spawned_prop_ids.add(spawned_crit_prop.id)
+
+    visible_location_props: list[LocationProp] = [
+        p.model_copy(update={"is_hidden": False})
+        for p in effective_unclaimed_props
+        if not p.is_hidden or p.id in newly_revealed_prop_ids
+    ]
+    if spawned_crit_prop is not None:
+        visible_location_props.append(
+            LocationProp(
+                id=spawned_crit_prop.id,
+                name=spawned_crit_prop.name,
+                note=spawned_crit_prop.note,
+                flags=list(spawned_crit_prop.flags),
+                lore_id=spawned_crit_prop.lore_id,
+                is_hidden=False,
+                auto_spawned=True,
+            )
+        )
+
+    initial_search_depths = dict(prior_search_depths)
+    if is_search_action:
+        initial_search_depths[active_location.id] = next_depth
 
     # PHASE 2: Scoped RAG & Context Resolution
     context_bundle = await resolve_phase2_turn_context(
@@ -766,6 +875,9 @@ async def _execute_turn_stream_events_unlocked(
         recall_budget_prose_tokens=eff_models.recall_budget_prose_tokens,
         active_parties=active_parties,
         newly_discovered_edge_ids=newly_discovered_edge_ids,
+        visible_location_props=visible_location_props,
+        newly_revealed_prop_ids=newly_revealed_prop_ids,
+        newly_spawned_prop_ids=newly_spawned_prop_ids,
     )
 
     is_sentinel_scene = is_narrator or is_solo
@@ -823,6 +935,11 @@ async def _execute_turn_stream_events_unlocked(
         active_location_id=active_location.id,
         scene_flags=parent_turn.world_snapshot.scene_flags,
         revealed_edge_ids=initial_revealed_edge_ids,
+        revealed_prop_ids=initial_revealed_prop_ids,
+        claimed_prop_ids=list(parent_turn.world_snapshot.claimed_prop_ids or []),
+        spawned_props=initial_spawned_props,
+        location_search_last_turn_depth=initial_search_depths,
+        auto_spawned_prop_location_ids=initial_auto_spawned_locs,
         parties=active_parties,
     )
     base_primary_state = context_bundle.all_character_states.get(character.id) or prev_char_state

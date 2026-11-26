@@ -52,6 +52,7 @@ import {
   findFirstEnabledIndex,
   formatActiveSlashCommand,
   getActiveSlashHint,
+  getLocationSearchCooldownRemaining,
   getSlashCommandPrefix,
   resolveSlashCommandToken,
   tryPromoteSlashInput,
@@ -438,18 +439,33 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     return presentCharacterIds.filter((cid) => !partyMemberIds.has(cid)).length;
   }, [presentCharacterIds, playerParty]);
 
+  const unlockLore = Boolean(bundle.campaign.world_settings?.unlock_lore);
+  const activeBranchLeafTurn =
+    bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
+  const nextTurnDepth = (activeBranchLeafTurn?.depth_index ?? 0) + 1;
+  const effectiveActiveLocationId =
+    pendingLocationOverrideId ?? bundle.active_location.id;
+  const searchCooldownRemaining = getLocationSearchCooldownRemaining(
+    bundle.current_world_snapshot,
+    effectiveActiveLocationId,
+    nextTurnDepth,
+    unlockLore
+  );
+
   const slashAvailabilityContext: SlashCommandAvailabilityContext = useMemo(
     () => ({
       presentCharacterCount: presentCharacters.length,
       eligiblePartyInviteCount,
       inPlayerParty: Boolean(playerParty),
       isEditingTurn: Boolean(editingTurn),
+      searchCooldownRemaining,
     }),
     [
       presentCharacters.length,
       eligiblePartyInviteCount,
       playerParty,
       editingTurn,
+      searchCooldownRemaining,
     ]
   );
 
@@ -1146,6 +1162,37 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     }
   };
 
+  const handleInvokeSearch = (focus?: string) => {
+    if (isBusy || Boolean(editingTurn) || searchCooldownRemaining > 0) return;
+    let parsedDice: number | null = null;
+    if (diceMode === "forced" && diceOverride.trim() !== "") {
+      const val = parseInt(diceOverride.trim(), 10);
+      if (isNaN(val) || val < 1 || val > 20) {
+        return;
+      }
+      parsedDice = val;
+    }
+    const cleanFocus = focus?.trim() || "";
+    setActivePopover("none");
+    setActiveTray("none");
+    setActiveSlash(null);
+    setInputText("");
+    setSlashCursorPos(0);
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
+    setMentionPickerOpen(false);
+    setDiceMode("auto");
+    setDiceOverride("");
+    magicWand.reset();
+    onSendTurn({
+      userMessage: cleanFocus ? `/search ${cleanFocus}` : "/search",
+      diceMode,
+      manualDiceOverride: diceMode === "forced" ? parsedDice : null,
+      searchAction: true,
+      searchFocus: cleanFocus || null,
+    });
+  };
+
   const handleQuickExit = (nb: NeighborLocationView) => {
     if (isBusy) return;
     setActivePopover("none");
@@ -1346,6 +1393,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         setDiceOverride("");
         magicWand.reset();
         handleInvokeNarrator("describe");
+        return;
+      }
+      if (cmdSpec?.id === "search") {
+        handleInvokeSearch(arg || undefined);
         return;
       }
       if (cmdSpec?.id === "wait") {
@@ -1549,6 +1600,12 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       manualDiceOverride: savedMode === "forced" ? savedManual : null,
       characterChoices: turn.pre_turn?.character_choices,
       partyAction: turn.pre_turn?.party_action ?? null,
+      ...(turn.pre_turn?.is_search_action
+        ? {
+            searchAction: true,
+            searchFocus: turn.pre_turn.search_focus ?? null,
+          }
+        : {}),
     });
   };
 
@@ -2210,6 +2267,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         handleRemoveMentionChip={handleRemoveMentionChip}
         checkAndTriggerMention={checkAndTriggerMention}
         handleInvokeNarrator={handleInvokeNarrator}
+        handleInvokeSearch={handleInvokeSearch}
+        searchCooldownRemaining={searchCooldownRemaining}
+        isGmMode={unlockLore}
         handleQuickExit={handleQuickExit}
         handleSendCustomDirective={handleSendCustomDirective}
         handleClearAllChoices={handleClearAllChoices}

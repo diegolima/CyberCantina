@@ -1160,6 +1160,49 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE world_state_snapshots ADD COLUMN revealed_edge_ids_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "revealed_prop_ids_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN revealed_prop_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "claimed_prop_ids_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN claimed_prop_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "spawned_props_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN spawned_props_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "location_search_last_turn_depth_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN location_search_last_turn_depth_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "auto_spawned_prop_location_ids_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN auto_spawned_prop_location_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS location_props (
+                    id TEXT PRIMARY KEY,
+                    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                    location_id TEXT NOT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+                    campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL CHECK(length(trim(name)) >= 1),
+                    note TEXT NOT NULL DEFAULT '',
+                    flags_json TEXT NOT NULL DEFAULT '[]',
+                    lore_id TEXT NULL,
+                    is_hidden INTEGER NOT NULL DEFAULT 0,
+                    sort_order INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_location_props_world_loc ON location_props(world_id, location_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_location_props_loc_camp ON location_props(location_id, campaign_id)"
+            )
 
             camp_cols = {
                 r["name"]

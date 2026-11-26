@@ -24,6 +24,7 @@ from app.schemas.persona import (
     PersonaRecord,
 )
 from app.schemas.turn import (
+    DEFAULT_GATE_DC,
     CanonicalOutcomeTier,
     CharacterCheckSpec,
     CharacterChoiceSet,
@@ -876,12 +877,15 @@ async def run_phase1_pre_analysis(
     already_unlocked_keys: set[str] | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
     party_action: PartyActionSpec | None = None,
+    is_search_action: bool = False,
+    search_focus: str | None = None,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
+    original_dice_mode = dice_mode
     has_any_gates = any(cs.has_gates for cs in (character_choices or {}).values())
     dice_mode_promoted = False
-    if dice_mode == "disabled" and has_any_gates:
-        dice_mode = "auto"
+    if dice_mode == "disabled" and (has_any_gates or is_search_action):
+        dice_mode = "forced" if is_search_action else "auto"
         dice_mode_promoted = True
 
     room_chars = list(present_characters) if present_characters is not None else [character]
@@ -1113,8 +1117,44 @@ async def run_phase1_pre_analysis(
     # Resolve per-character checks with individual rolls and mode enforcement
     analysis.dice_mode = dice_mode
     analysis.manual_dice_value = manual_dice_override if dice_mode == "forced" else None
+    analysis.is_search_action = bool(is_search_action)
+    analysis.search_focus = search_focus.strip() if (search_focus and search_focus.strip()) else None
+    analysis.roll_was_pinned = bool(original_dice_mode == "forced" and manual_dice_override is not None)
 
-    if dice_mode == "disabled":
+    if is_search_action:
+        # Fixed DC 12 Perception/Investigation roll on every /search (even in empty rooms)
+        if dice_mode == "auto":
+            dice_mode = "forced"
+            analysis.dice_mode = "forced"
+            dice_mode_promoted = True
+        search_desc = (
+            f"Search: {analysis.search_focus}"
+            if analysis.search_focus
+            else f"Search {active_location.name}"
+        )
+        search_trigger = MechanicsTrigger(
+            requires_roll=True,
+            action_description=search_desc[:120],
+            skill_or_approach="Perception / Investigation",
+            difficulty_class=DEFAULT_GATE_DC,
+            relevant_modifier=1,
+        )
+        analysis.mechanics_check = search_trigger
+        analysis.character_checks = []
+        analysis.character_rolls = {}
+        protagonist_label = (
+            persona_snapshot.name.strip()
+            if persona_snapshot and persona_snapshot.name and persona_snapshot.name.strip()
+            else "Protagonist"
+        )
+        analysis.resolved_roll = resolve_dice_check(
+            search_trigger,
+            manual_override=manual_dice_override if original_dice_mode == "forced" else None,
+            character_id="__solo__" if is_solo else "__player__",
+            character_name=protagonist_label,
+            rng=rng,
+        )
+    elif dice_mode == "disabled":
         analysis.character_rolls = {}
         analysis.resolved_roll = None
         analysis.mechanics_check.requires_roll = False

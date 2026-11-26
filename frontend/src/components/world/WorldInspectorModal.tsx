@@ -31,6 +31,7 @@ import type {
   LocationLoreCategory,
   LocationLoreNodeDraft,
   LocationNode,
+  LocationProp,
   LoreNode,
   MechanicsTopicId,
   MemoryShard,
@@ -96,6 +97,18 @@ interface WorldInspectorModalProps {
     edgeId: string,
     revealed: boolean
   ) => Promise<void> | void;
+  onSaveCampaignLocationProps?: (
+    locationId: string,
+    props: LocationProp[]
+  ) => Promise<void> | void;
+  onToggleCampaignPropReveal?: (
+    propId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
+  onTransferCampaignProp?: (
+    propId: string,
+    holderId: string
+  ) => Promise<void> | void;
   onSaveCampaignMap?: (payload: {
     containers: LocationContainer[];
     locations: LocationNode[];
@@ -103,6 +116,7 @@ interface WorldInspectorModalProps {
   }) => Promise<void> | void;
   revealedLoreIds?: readonly string[];
   revealedEdgeIds?: readonly string[];
+  revealedPropIds?: readonly string[];
   isMutatingLocked?: boolean;
   onBackToSeed?: () => void;
   onCommitDraft?: (payload: {
@@ -156,9 +170,13 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   onSaveCampaignContainerLore,
   onToggleCampaignLoreReveal,
   onToggleCampaignEdgeReveal,
+  onSaveCampaignLocationProps,
+  onToggleCampaignPropReveal,
+  onTransferCampaignProp,
   onSaveCampaignMap,
   revealedLoreIds = [],
   revealedEdgeIds = [],
+  revealedPropIds = [],
   isMutatingLocked = false,
   onBackToSeed,
   onCommitDraft,
@@ -185,6 +203,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [name, setName] = useState(world.name);
   const [globalRules, setGlobalRules] = useState<WorldGlobalRules>({
     describe_on_first_visit: true,
+    auto_spawn_props_on_search_crit: false,
     ...world.global_rules,
   });
   const [campaignDescribeFirstVisit, setCampaignDescribeFirstVisit] = useState<boolean>(
@@ -192,6 +211,12 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       world.global_rules.describe_on_first_visit ??
       true
   );
+  const [campaignAutoSpawnOnSearchCrit, setCampaignAutoSpawnOnSearchCrit] =
+    useState<boolean>(
+      campaignWorldSettings?.auto_spawn_props_on_search_crit ??
+        world.global_rules.auto_spawn_props_on_search_crit ??
+        false
+    );
   const [campaignUnlockLore, setCampaignUnlockLore] = useState<boolean>(
     Boolean(campaignWorldSettings?.unlock_lore)
   );
@@ -201,8 +226,17 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   useEffect(() => {
     if (isCampaignMode) {
       setCampaignUnlockLore(Boolean(campaignWorldSettings?.unlock_lore));
+      if (campaignWorldSettings?.auto_spawn_props_on_search_crit !== undefined) {
+        setCampaignAutoSpawnOnSearchCrit(
+          Boolean(campaignWorldSettings.auto_spawn_props_on_search_crit)
+        );
+      }
     }
-  }, [isCampaignMode, campaignWorldSettings?.unlock_lore]);
+  }, [
+    isCampaignMode,
+    campaignWorldSettings?.unlock_lore,
+    campaignWorldSettings?.auto_spawn_props_on_search_crit,
+  ]);
 
   useEffect(() => {
     if (isCampaignMode && !campaignWorldLoreDirty) {
@@ -238,6 +272,10 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
         lore_nodes: (loc.lore_nodes ?? []).map((ln) => ({
           ...ln,
           entity_tags: [...(ln.entity_tags ?? [])],
+        })),
+        props: (loc.props ?? []).map((prop) => ({
+          ...prop,
+          flags: [...(prop.flags ?? [])],
         })),
       }))
   );
@@ -595,6 +633,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           await onSaveCampaignWorldSettings({
             describe_on_first_visit: campaignDescribeFirstVisit,
             unlock_lore: campaignUnlockLore,
+            auto_spawn_props_on_search_crit: campaignAutoSpawnOnSearchCrit,
           });
         }
         if (flushedCampaignLore !== null && onSaveCampaignWorldLore) {
@@ -670,6 +709,12 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           : "rumor",
         entity_tags: normalizeTagList(ln.entity_tags || [], []),
       })),
+      props: (loc.props ?? []).map((prop) => ({
+        ...prop,
+        name: (prop.name || "").trim(),
+        note: (prop.note || "").trim(),
+        flags: [...(prop.flags ?? [])],
+      })),
     }));
 
     for (const loc of sanitizedLocations) {
@@ -681,6 +726,16 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             `Location "${loc.name}" Lore entry #${i + 1} ("${
               ln.title || "Untitled"
             }") must have a non-empty title, content, and at least 1 trigger keyword.`
+          );
+          return;
+        }
+      }
+      for (let i = 0; i < (loc.props ?? []).length; i++) {
+        const prop = loc.props![i];
+        if (!prop.name) {
+          setActiveTab("map");
+          setError(
+            `Location "${loc.name}" Prop #${i + 1} must have a non-empty item name.`
           );
           return;
         }
@@ -1104,10 +1159,29 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 unlockLore={isCampaignMode ? campaignUnlockLore : false}
                 revealedLoreIds={revealedLoreIds}
                 revealedEdgeIds={revealedEdgeIds}
+                revealedPropIds={revealedPropIds}
+                worldArtifactLore={loreNodes.filter(
+                  (ln) => ln.category === "artifact"
+                )}
+                propTransferTargets={[
+                  {
+                    id: "player",
+                    label: activePersona?.name
+                      ? `Player (${activePersona.name})`
+                      : "Player",
+                  },
+                  ...campaignCharacters.map((c) => ({
+                    id: c.record.id,
+                    label: c.record.name,
+                  })),
+                ]}
                 onSaveCampaignLocationLore={onSaveCampaignLocationLore}
                 onSaveCampaignContainerLore={onSaveCampaignContainerLore}
                 onToggleLoreReveal={onToggleCampaignLoreReveal}
                 onToggleEdgeReveal={onToggleCampaignEdgeReveal}
+                onSaveCampaignLocationProps={onSaveCampaignLocationProps}
+                onTogglePropReveal={onToggleCampaignPropReveal}
+                onTransferProp={onTransferCampaignProp}
                 externalFocusRequest={externalMapFocus}
                 worldMedia={media}
                 visitedContainerIds={visitedContainerIds}
@@ -1275,6 +1349,51 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 alignItems: "flex-start",
                 gap: 10,
                 background: "var(--bg-card)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: 8,
+                padding: "12px 14px",
+                cursor: isCampaignMode && isMutatingLocked ? "not-allowed" : "pointer",
+                opacity: isCampaignMode && isMutatingLocked ? 0.6 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                style={{ marginTop: 3 }}
+                disabled={isCampaignMode && isMutatingLocked}
+                checked={
+                  isCampaignMode
+                    ? campaignAutoSpawnOnSearchCrit
+                    : Boolean(globalRules.auto_spawn_props_on_search_crit)
+                }
+                onChange={(e) => {
+                  const nextVal = e.target.checked;
+                  if (isCampaignMode) {
+                    setCampaignAutoSpawnOnSearchCrit(nextVal);
+                  } else {
+                    setGlobalRules({
+                      ...globalRules,
+                      auto_spawn_props_on_search_crit: nextVal,
+                    });
+                  }
+                  markDirty();
+                }}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                  Auto-spawn situational props on /search Critical Success
+                </span>
+                <span style={{ fontSize: "0.76rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                  Off by default. On an unpinned Critical Success (d20 + bonus &gt;= 20 or natural 20) from /search in a room with 0 uncollected props, creates up to 1 bounded utility prop (clue, mundane tool, minor consumable, or improvised aid — never weapons, currencies, or master keys) once per room.
+                </span>
+              </div>
+            </label>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                background: "var(--bg-card)",
                 border:
                   isCampaignMode && campaignUnlockLore
                     ? "1px solid rgba(245, 158, 11, 0.5)"
@@ -1318,6 +1437,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                       await onSaveCampaignWorldSettings({
                         describe_on_first_visit: campaignDescribeFirstVisit,
                         unlock_lore: nextVal,
+                        auto_spawn_props_on_search_crit: campaignAutoSpawnOnSearchCrit,
                       });
                     } catch (err) {
                       setCampaignUnlockLore(!nextVal);

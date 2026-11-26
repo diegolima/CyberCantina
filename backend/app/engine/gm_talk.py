@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.config import settings
+from app.db.repos.turns import resolve_effective_location_props
 from app.db.repository import CantinaRepository
 from app.engine.game_mechanics import (
     CARRYOVER_MATCH_MIN_SCORE,
@@ -740,6 +741,38 @@ def _format_character_detail(
     return "\n".join(lines)
 
 
+def _format_gm_location_props_block(
+    loc: Any,
+    snap: Any,
+    *,
+    unlock_lore: bool,
+) -> str | None:
+    """Format spoiler-gated portable room props for GM Talk context blocks."""
+    permitted_props = resolve_effective_location_props(
+        loc,
+        snap,
+        include_hidden=unlock_lore,
+        preserve_hidden_flag=True,
+    )
+    if not permitted_props:
+        return None
+    rev_set = set(getattr(snap, "revealed_prop_ids", None) or [])
+    prop_strs = []
+    for p in permitted_props:
+        status_tag = ""
+        if unlock_lore:
+            if p.is_hidden and p.id not in rev_set:
+                status_tag = " [Hidden]"
+            elif p.is_hidden and p.id in rev_set:
+                status_tag = " [Revealed]"
+            if p.auto_spawned:
+                status_tag += " [Auto-spawned]"
+        prop_strs.append(
+            f"- {p.name}{status_tag}" + (f": {p.note}" if p.note else "")
+        )
+    return "Portable Props:\n" + "\n".join(prop_strs)
+
+
 def _serialize_pinned_mention(
     ref: GmMentionRef,
     vis: _BranchVisibility,
@@ -821,6 +854,13 @@ def _serialize_pinned_mention(
                 "Local Lore:\n"
                 + "\n".join(f"- [{ln.category}] {ln.title}: {ln.content}" for ln in permitted_loc_lore)
             )
+        props_block = _format_gm_location_props_block(
+            loc,
+            vis.bundle.current_world_snapshot,
+            unlock_lore=vis.unlock_lore,
+        )
+        if props_block:
+            lines.append(props_block)
         return "\n".join(lines), GmSourceRef(kind="location", id=loc.id, label=loc.name)
 
     if ref.kind == "container":
@@ -1156,6 +1196,13 @@ async def build_gm_context_and_messages(
         f"Scene Flags: {', '.join(snap.scene_flags) or 'none'}",
         f"Present Characters: {', '.join(present_names) or 'none (player is alone)'}",
     ]
+    scene_props_block = _format_gm_location_props_block(
+        bundle.active_location,
+        snap,
+        unlock_lore=vis.unlock_lore,
+    )
+    if scene_props_block:
+        scene_lines.append(scene_props_block)
     scene_block = "\n".join(scene_lines)
 
     party_lines: list[str] = []

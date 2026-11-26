@@ -246,6 +246,9 @@ const AppShell: React.FC = () => {
     handleDeleteCampaignMajorEvent,
     handleSaveCampaignLocationLore,
     handleSaveCampaignContainerLore,
+    handleSaveCampaignLocationProps,
+    handleToggleCampaignPropReveal,
+    handleTransferCampaignProp,
     handleSaveCampaignMap,
     handleCheckoutTurn,
     handleDeleteLastTurn,
@@ -1207,6 +1210,9 @@ const AppShell: React.FC = () => {
           onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
           onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
           onToggleCampaignEdgeReveal={handleToggleCampaignEdgeReveal}
+          onSaveCampaignLocationProps={handleSaveCampaignLocationProps}
+          onToggleCampaignPropReveal={handleToggleCampaignPropReveal}
+          onTransferCampaignProp={handleTransferCampaignProp}
           onOpenMechanicsHelp={handleOpenMechanicsGuide}
           isMutatingLocked={isStreaming || isPhase4Running}
         />
@@ -1263,6 +1269,7 @@ const AppShell: React.FC = () => {
           }
           revealedLoreIds={bundle.current_world_snapshot.revealed_lore_ids ?? []}
           revealedEdgeIds={bundle.current_world_snapshot.revealed_edge_ids ?? []}
+          revealedPropIds={bundle.current_world_snapshot.revealed_prop_ids ?? []}
           campaignWorldSettings={bundle.campaign.world_settings}
           appSettings={appSettings}
           isAdmin={currentUser.role === "admin"}
@@ -1273,6 +1280,9 @@ const AppShell: React.FC = () => {
           onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
           onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
           onToggleCampaignEdgeReveal={handleToggleCampaignEdgeReveal}
+          onSaveCampaignLocationProps={handleSaveCampaignLocationProps}
+          onToggleCampaignPropReveal={handleToggleCampaignPropReveal}
+          onTransferCampaignProp={handleTransferCampaignProp}
           onSaveCampaignMap={handleSaveCampaignMap}
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}

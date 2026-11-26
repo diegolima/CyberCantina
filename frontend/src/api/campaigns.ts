@@ -10,6 +10,7 @@ import type {
   DiceMode,
   ItemEquipActionPayload,
   LocationLoreNodeDraft,
+  LocationProp,
   LocationOverrideOptions,
   MemoryShard,
   PersonaTurnStateSnapshot,
@@ -223,6 +224,45 @@ export const campaignsApi = {
       {
         method: "PUT",
         body: JSON.stringify({ lore_nodes: loreNodes }),
+      }
+    ),
+
+  updateCampaignLocationProps: (
+    campaignId: string,
+    locationId: string,
+    props: LocationProp[]
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/locations/${locationId}/props`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ props }),
+      }
+    ),
+
+  toggleCampaignPropReveal: (
+    campaignId: string,
+    propId: string,
+    revealed: boolean
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/props/${propId}/reveal`,
+      {
+        method: "POST",
+        body: JSON.stringify({ revealed }),
+      }
+    ),
+
+  transferCampaignProp: (
+    campaignId: string,
+    propId: string,
+    holderId: string
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/props/${propId}/transfer`,
+      {
+        method: "POST",
+        body: JSON.stringify({ holder_id: holderId }),
       }
     ),
 

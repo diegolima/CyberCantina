@@ -26,10 +26,11 @@ from app.schemas.turn import (
     PostTurnStateDelta,
     PreTurnAnalysis,
     RecalledMemoryItem,
+    SpawnedLocationProp,
     TurnNodeRecord,
     WorldStateSnapshot,
 )
-from app.schemas.world import is_edge_revealed
+from app.schemas.world import LocationNode, LocationProp, is_edge_revealed
 from app.db.repos.base import (
     UNSET,
     _parse_care_state_json,
@@ -38,6 +39,82 @@ from app.db.repos.base import (
     _merge_live_clerk_state_items,
     utc_now_iso,
 )
+
+
+def resolve_effective_location_props(
+    location: LocationNode,
+    world_snapshot: WorldStateSnapshot | None,
+    *,
+    include_hidden: bool = True,
+    preserve_hidden_flag: bool = False,
+) -> list[LocationProp]:
+    """Resolve unclaimed effective LocationProps for a Level 0 location against a branch snapshot."""
+    base_props = list(getattr(location, "props", None) or [])
+    if world_snapshot is None:
+        return [p for p in base_props if include_hidden or not p.is_hidden]
+
+    claimed_set = set(world_snapshot.claimed_prop_ids or [])
+    revealed_set = set(world_snapshot.revealed_prop_ids or [])
+    spawned_by_id: dict[str, LocationProp] = {}
+    for sp in world_snapshot.spawned_props or []:
+        if sp.location_id == location.id:
+            spawned_by_id[sp.id] = LocationProp(
+                id=sp.id,
+                name=sp.name,
+                note=sp.note,
+                flags=list(sp.flags),
+                lore_id=sp.lore_id,
+                is_hidden=sp.is_hidden,
+                auto_spawned=sp.auto_spawned,
+            )
+
+    merged: list[LocationProp] = []
+    for p in base_props:
+        candidate = spawned_by_id.pop(p.id, p)
+        if candidate.id in claimed_set:
+            continue
+        eff_hidden = bool(candidate.is_hidden) and (candidate.id not in revealed_set)
+        if not include_hidden and eff_hidden:
+            continue
+        out_hidden = bool(candidate.is_hidden) if preserve_hidden_flag else eff_hidden
+        merged.append(candidate.model_copy(update={"is_hidden": out_hidden}))
+
+    for sp_prop in spawned_by_id.values():
+        if sp_prop.id in claimed_set:
+            continue
+        eff_hidden = bool(sp_prop.is_hidden) and (sp_prop.id not in revealed_set)
+        if not include_hidden and eff_hidden:
+            continue
+        out_hidden = bool(sp_prop.is_hidden) if preserve_hidden_flag else eff_hidden
+        merged.append(sp_prop.model_copy(update={"is_hidden": out_hidden}))
+
+    return merged
+
+
+def _redact_unrevealed_props_from_location(
+    loc: LocationNode,
+    revealed_prop_ids: set[str],
+) -> LocationNode:
+    """Strip unrevealed hidden props from a LocationNode before returning to non-GM players."""
+    raw_props = getattr(loc, "props", None) or []
+    if not raw_props:
+        return loc
+    visible_props = [
+        p for p in raw_props if not p.is_hidden or p.id in revealed_prop_ids
+    ]
+    if len(visible_props) == len(raw_props):
+        return loc
+    return loc.model_copy(update={"props": visible_props})
+
+
+def _merge_spawned_props(
+    existing: list[SpawnedLocationProp],
+    incoming: list[SpawnedLocationProp],
+) -> list[SpawnedLocationProp]:
+    merged_by_id: dict[str, SpawnedLocationProp] = {p.id: p for p in existing}
+    for p in incoming:
+        merged_by_id[p.id] = p
+    return list(merged_by_id.values())
 
 
 class TurnsBranchesMixin:
@@ -131,17 +208,41 @@ class TurnsBranchesMixin:
             revealed_edge_ids = list(
                 dict.fromkeys(world_snapshot.revealed_edge_ids or [])
             )
+            revealed_prop_ids = list(
+                dict.fromkeys(world_snapshot.revealed_prop_ids or [])
+            )
+            claimed_prop_ids = list(
+                dict.fromkeys(world_snapshot.claimed_prop_ids or [])
+            )
+            spawned_props = list(world_snapshot.spawned_props or [])
+            search_depths = dict(world_snapshot.location_search_last_turn_depth or {})
+            auto_spawned_locs = list(
+                dict.fromkeys(world_snapshot.auto_spawned_prop_location_ids or [])
+            )
             if parent_turn_id is not None and (
                 not world_snapshot.visited_location_ids
                 or not world_snapshot.visited_container_ids
                 or not world_snapshot.revealed_lore_ids
                 or not world_snapshot.revealed_edge_ids
+                or not world_snapshot.revealed_prop_ids
+                or not world_snapshot.claimed_prop_ids
+                or not world_snapshot.spawned_props
+                or not world_snapshot.location_search_last_turn_depth
+                or not world_snapshot.auto_spawned_prop_location_ids
             ):
                 parent_ws = conn.execute(
-                    "SELECT visited_location_ids_json, visited_container_ids_json, revealed_lore_ids_json, revealed_edge_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                    """
+                    SELECT visited_location_ids_json, visited_container_ids_json,
+                           revealed_lore_ids_json, revealed_edge_ids_json,
+                           revealed_prop_ids_json, claimed_prop_ids_json,
+                           spawned_props_json, location_search_last_turn_depth_json,
+                           auto_spawned_prop_location_ids_json
+                    FROM world_state_snapshots WHERE turn_id = ?
+                    """,
                     (parent_turn_id,),
                 ).fetchone()
                 if parent_ws:
+                    p_ws_keys = parent_ws.keys()
                     if not world_snapshot.visited_location_ids and parent_ws["visited_location_ids_json"]:
                         try:
                             parent_visited = json.loads(parent_ws["visited_location_ids_json"] or "[]")
@@ -156,7 +257,7 @@ class TurnsBranchesMixin:
                         visited_container_ids = list(dict.fromkeys([*parent_conts, *visited_container_ids]))
                     if (
                         not world_snapshot.revealed_lore_ids
-                        and "revealed_lore_ids_json" in parent_ws.keys()
+                        and "revealed_lore_ids_json" in p_ws_keys
                         and parent_ws["revealed_lore_ids_json"]
                     ):
                         try:
@@ -166,7 +267,7 @@ class TurnsBranchesMixin:
                         revealed_lore_ids = list(dict.fromkeys([*parent_revealed, *revealed_lore_ids]))
                     if (
                         not world_snapshot.revealed_edge_ids
-                        and "revealed_edge_ids_json" in parent_ws.keys()
+                        and "revealed_edge_ids_json" in p_ws_keys
                         and parent_ws["revealed_edge_ids_json"]
                     ):
                         try:
@@ -174,15 +275,79 @@ class TurnsBranchesMixin:
                         except Exception:
                             parent_rev_edges = []
                         revealed_edge_ids = list(dict.fromkeys([*parent_rev_edges, *revealed_edge_ids]))
+                    if (
+                        not world_snapshot.revealed_prop_ids
+                        and "revealed_prop_ids_json" in p_ws_keys
+                        and parent_ws["revealed_prop_ids_json"]
+                    ):
+                        try:
+                            parent_rev_props = json.loads(parent_ws["revealed_prop_ids_json"] or "[]")
+                        except Exception:
+                            parent_rev_props = []
+                        revealed_prop_ids = list(dict.fromkeys([*parent_rev_props, *revealed_prop_ids]))
+                    if (
+                        not world_snapshot.claimed_prop_ids
+                        and "claimed_prop_ids_json" in p_ws_keys
+                        and parent_ws["claimed_prop_ids_json"]
+                    ):
+                        try:
+                            parent_claimed_props = json.loads(parent_ws["claimed_prop_ids_json"] or "[]")
+                        except Exception:
+                            parent_claimed_props = []
+                        claimed_prop_ids = list(dict.fromkeys([*parent_claimed_props, *claimed_prop_ids]))
+                    if (
+                        not world_snapshot.spawned_props
+                        and "spawned_props_json" in p_ws_keys
+                        and parent_ws["spawned_props_json"]
+                    ):
+                        try:
+                            parent_spawned = [
+                                SpawnedLocationProp.model_validate(sp)
+                                for sp in json.loads(parent_ws["spawned_props_json"] or "[]")
+                            ]
+                        except Exception:
+                            parent_spawned = []
+                        spawned_props = _merge_spawned_props(parent_spawned, spawned_props)
+                    if (
+                        not world_snapshot.location_search_last_turn_depth
+                        and "location_search_last_turn_depth_json" in p_ws_keys
+                        and parent_ws["location_search_last_turn_depth_json"]
+                    ):
+                        try:
+                            raw_sd = json.loads(parent_ws["location_search_last_turn_depth_json"] or "{}")
+                            if isinstance(raw_sd, dict):
+                                search_depths = {
+                                    **{str(k): int(v) for k, v in raw_sd.items()},
+                                    **search_depths,
+                                }
+                        except Exception:
+                            pass
+                    if (
+                        not world_snapshot.auto_spawned_prop_location_ids
+                        and "auto_spawned_prop_location_ids_json" in p_ws_keys
+                        and parent_ws["auto_spawned_prop_location_ids_json"]
+                    ):
+                        try:
+                            parent_auto_locs = json.loads(
+                                parent_ws["auto_spawned_prop_location_ids_json"] or "[]"
+                            )
+                        except Exception:
+                            parent_auto_locs = []
+                        auto_spawned_locs = list(
+                            dict.fromkeys([*parent_auto_locs, *auto_spawned_locs])
+                        )
 
             conn.execute(
                 """
                 INSERT INTO world_state_snapshots (
                     turn_id, world_timestamp, active_location_id, scene_flags_json,
                     campaign_elapsed_minutes, visited_location_ids_json, visited_container_ids_json,
-                    revealed_lore_ids_json, revealed_edge_ids_json, parties_json
+                    revealed_lore_ids_json, revealed_edge_ids_json,
+                    revealed_prop_ids_json, claimed_prop_ids_json, spawned_props_json,
+                    location_search_last_turn_depth_json, auto_spawned_prop_location_ids_json,
+                    parties_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -194,6 +359,11 @@ class TurnsBranchesMixin:
                     json.dumps(visited_container_ids),
                     json.dumps(revealed_lore_ids),
                     json.dumps(revealed_edge_ids),
+                    json.dumps(revealed_prop_ids),
+                    json.dumps(claimed_prop_ids),
+                    json.dumps([sp.model_dump() for sp in spawned_props]),
+                    json.dumps(search_depths),
+                    json.dumps(auto_spawned_locs),
                     json.dumps([p.model_dump() for p in world_snapshot.parties]),
                 ),
             )
@@ -368,13 +538,26 @@ class TurnsBranchesMixin:
                 (post_turn.model_dump_json(), turn_id),
             )
             existing_ws = conn.execute(
-                "SELECT visited_location_ids_json, visited_container_ids_json, revealed_lore_ids_json, revealed_edge_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                """
+                SELECT visited_location_ids_json, visited_container_ids_json,
+                       revealed_lore_ids_json, revealed_edge_ids_json,
+                       revealed_prop_ids_json, claimed_prop_ids_json,
+                       spawned_props_json, location_search_last_turn_depth_json,
+                       auto_spawned_prop_location_ids_json
+                FROM world_state_snapshots WHERE turn_id = ?
+                """,
                 (turn_id,),
             ).fetchone()
             existing_visited: list[str] = []
             existing_visited_containers: list[str] = []
             existing_revealed_lore: list[str] = []
             existing_revealed_edges: list[str] = []
+            existing_revealed_props: list[str] = []
+            existing_claimed_props: list[str] = []
+            existing_spawned_props: list[SpawnedLocationProp] = []
+            existing_search_depths: dict[str, int] = {}
+            existing_auto_spawned_locs: list[str] = []
+            ex_ws_keys = existing_ws.keys() if existing_ws else ()
             if existing_ws and existing_ws["visited_location_ids_json"]:
                 try:
                     existing_visited = json.loads(existing_ws["visited_location_ids_json"] or "[]")
@@ -387,16 +570,56 @@ class TurnsBranchesMixin:
                     )
                 except Exception:
                     existing_visited_containers = []
-            if existing_ws and "revealed_lore_ids_json" in existing_ws.keys() and existing_ws["revealed_lore_ids_json"]:
+            if existing_ws and "revealed_lore_ids_json" in ex_ws_keys and existing_ws["revealed_lore_ids_json"]:
                 try:
                     existing_revealed_lore = json.loads(existing_ws["revealed_lore_ids_json"] or "[]")
                 except Exception:
                     existing_revealed_lore = []
-            if existing_ws and "revealed_edge_ids_json" in existing_ws.keys() and existing_ws["revealed_edge_ids_json"]:
+            if existing_ws and "revealed_edge_ids_json" in ex_ws_keys and existing_ws["revealed_edge_ids_json"]:
                 try:
                     existing_revealed_edges = json.loads(existing_ws["revealed_edge_ids_json"] or "[]")
                 except Exception:
                     existing_revealed_edges = []
+            if existing_ws and "revealed_prop_ids_json" in ex_ws_keys and existing_ws["revealed_prop_ids_json"]:
+                try:
+                    existing_revealed_props = json.loads(existing_ws["revealed_prop_ids_json"] or "[]")
+                except Exception:
+                    existing_revealed_props = []
+            if existing_ws and "claimed_prop_ids_json" in ex_ws_keys and existing_ws["claimed_prop_ids_json"]:
+                try:
+                    existing_claimed_props = json.loads(existing_ws["claimed_prop_ids_json"] or "[]")
+                except Exception:
+                    existing_claimed_props = []
+            if existing_ws and "spawned_props_json" in ex_ws_keys and existing_ws["spawned_props_json"]:
+                try:
+                    existing_spawned_props = [
+                        SpawnedLocationProp.model_validate(sp)
+                        for sp in json.loads(existing_ws["spawned_props_json"] or "[]")
+                    ]
+                except Exception:
+                    existing_spawned_props = []
+            if (
+                existing_ws
+                and "location_search_last_turn_depth_json" in ex_ws_keys
+                and existing_ws["location_search_last_turn_depth_json"]
+            ):
+                try:
+                    raw_sd = json.loads(existing_ws["location_search_last_turn_depth_json"] or "{}")
+                    if isinstance(raw_sd, dict):
+                        existing_search_depths = {str(k): int(v) for k, v in raw_sd.items()}
+                except Exception:
+                    existing_search_depths = {}
+            if (
+                existing_ws
+                and "auto_spawned_prop_location_ids_json" in ex_ws_keys
+                and existing_ws["auto_spawned_prop_location_ids_json"]
+            ):
+                try:
+                    existing_auto_spawned_locs = json.loads(
+                        existing_ws["auto_spawned_prop_location_ids_json"] or "[]"
+                    )
+                except Exception:
+                    existing_auto_spawned_locs = []
             merged_visited = list(
                 dict.fromkeys(
                     [
@@ -434,13 +657,48 @@ class TurnsBranchesMixin:
                     ]
                 )
             )
+            merged_revealed_props = list(
+                dict.fromkeys(
+                    [
+                        *existing_revealed_props,
+                        *(updated_world_snapshot.revealed_prop_ids or []),
+                    ]
+                )
+            )
+            merged_claimed_props = list(
+                dict.fromkeys(
+                    [
+                        *existing_claimed_props,
+                        *(updated_world_snapshot.claimed_prop_ids or []),
+                    ]
+                )
+            )
+            merged_spawned_props = _merge_spawned_props(
+                existing_spawned_props,
+                list(updated_world_snapshot.spawned_props or []),
+            )
+            merged_search_depths = {
+                **existing_search_depths,
+                **(updated_world_snapshot.location_search_last_turn_depth or {}),
+            }
+            merged_auto_spawned_locs = list(
+                dict.fromkeys(
+                    [
+                        *existing_auto_spawned_locs,
+                        *(updated_world_snapshot.auto_spawned_prop_location_ids or []),
+                    ]
+                )
+            )
             conn.execute(
                 """
                 UPDATE world_state_snapshots
                 SET world_timestamp = ?, active_location_id = ?, scene_flags_json = ?,
                     campaign_elapsed_minutes = ?, visited_location_ids_json = ?,
                     visited_container_ids_json = ?, revealed_lore_ids_json = ?,
-                    revealed_edge_ids_json = ?, parties_json = ?
+                    revealed_edge_ids_json = ?, revealed_prop_ids_json = ?,
+                    claimed_prop_ids_json = ?, spawned_props_json = ?,
+                    location_search_last_turn_depth_json = ?,
+                    auto_spawned_prop_location_ids_json = ?, parties_json = ?
                 WHERE turn_id = ?
                 """,
                 (
@@ -452,6 +710,11 @@ class TurnsBranchesMixin:
                     json.dumps(merged_visited_containers),
                     json.dumps(merged_revealed_lore),
                     json.dumps(merged_revealed_edges),
+                    json.dumps(merged_revealed_props),
+                    json.dumps(merged_claimed_props),
+                    json.dumps([sp.model_dump() for sp in merged_spawned_props]),
+                    json.dumps(merged_search_depths),
+                    json.dumps(merged_auto_spawned_locs),
                     json.dumps([p.model_dump() for p in updated_world_snapshot.parties]),
                     turn_id,
                 ),
@@ -827,6 +1090,11 @@ class TurnsBranchesMixin:
                     ws.visited_container_ids_json,
                     ws.revealed_lore_ids_json,
                     ws.revealed_edge_ids_json,
+                    ws.revealed_prop_ids_json,
+                    ws.claimed_prop_ids_json,
+                    ws.spawned_props_json,
+                    ws.location_search_last_turn_depth_json,
+                    ws.auto_spawned_prop_location_ids_json,
                     ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
@@ -903,6 +1171,11 @@ class TurnsBranchesMixin:
                     ws.visited_container_ids_json,
                     ws.revealed_lore_ids_json,
                     ws.revealed_edge_ids_json,
+                    ws.revealed_prop_ids_json,
+                    ws.claimed_prop_ids_json,
+                    ws.spawned_props_json,
+                    ws.location_search_last_turn_depth_json,
+                    ws.auto_spawned_prop_location_ids_json,
                     ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
@@ -951,6 +1224,11 @@ class TurnsBranchesMixin:
                     ws.visited_container_ids_json,
                     ws.revealed_lore_ids_json,
                     ws.revealed_edge_ids_json,
+                    ws.revealed_prop_ids_json,
+                    ws.claimed_prop_ids_json,
+                    ws.spawned_props_json,
+                    ws.location_search_last_turn_depth_json,
+                    ws.auto_spawned_prop_location_ids_json,
                     ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
@@ -1279,6 +1557,56 @@ class TurnsBranchesMixin:
                 physical_context="",
             )
 
+        leaf_snap = leaf_turn.world_snapshot
+        world_filtered.locations = [
+            loc.model_copy(
+                update={
+                    "props": resolve_effective_location_props(
+                        loc,
+                        leaf_snap,
+                        include_hidden=gm_lore_unlocked,
+                        preserve_hidden_flag=True,
+                    )
+                }
+            )
+            for loc in world_filtered.locations
+        ]
+        active_loc = active_loc.model_copy(
+            update={
+                "props": resolve_effective_location_props(
+                    active_loc,
+                    leaf_snap,
+                    include_hidden=gm_lore_unlocked,
+                    preserve_hidden_flag=True,
+                )
+            }
+        )
+        for nb in neighbors:
+            nb.destination = nb.destination.model_copy(
+                update={
+                    "props": resolve_effective_location_props(
+                        nb.destination,
+                        leaf_snap,
+                        include_hidden=gm_lore_unlocked,
+                        preserve_hidden_flag=True,
+                    )
+                }
+            )
+
+        if not gm_lore_unlocked:
+            rev_props_set = set(leaf_snap.revealed_prop_ids or [])
+            for t in [*branch_turns, *all_turns]:
+                t_rev = set(t.world_snapshot.revealed_prop_ids or []) | rev_props_set
+                t.world_snapshot = t.world_snapshot.model_copy(
+                    update={
+                        "spawned_props": [
+                            sp
+                            for sp in (t.world_snapshot.spawned_props or [])
+                            if not sp.is_hidden or sp.id in t_rev
+                        ]
+                    }
+                )
+
         return CampaignStateBundle(
             campaign=campaign,
             active_branch_turns=branch_turns,
@@ -1463,6 +1791,28 @@ class TurnsBranchesMixin:
             except Exception:
                 telemetry_obj = None
 
+        spawned_props_list: list[SpawnedLocationProp] = []
+        if "spawned_props_json" in r.keys() and r["spawned_props_json"]:
+            try:
+                spawned_props_list = [
+                    SpawnedLocationProp.model_validate(sp)
+                    for sp in json.loads(r["spawned_props_json"] or "[]")
+                ]
+            except Exception:
+                pass
+
+        search_depths_map: dict[str, int] = {}
+        if (
+            "location_search_last_turn_depth_json" in r.keys()
+            and r["location_search_last_turn_depth_json"]
+        ):
+            try:
+                raw_sd = json.loads(r["location_search_last_turn_depth_json"] or "{}")
+                if isinstance(raw_sd, dict):
+                    search_depths_map = {str(k): int(v) for k, v in raw_sd.items()}
+            except Exception:
+                pass
+
         return TurnNodeRecord(
             id=r["id"],
             campaign_id=r["campaign_id"],
@@ -1505,6 +1855,23 @@ class TurnsBranchesMixin:
                 revealed_edge_ids=(
                     json.loads(r["revealed_edge_ids_json"] or "[]")
                     if "revealed_edge_ids_json" in r.keys()
+                    else []
+                ),
+                revealed_prop_ids=(
+                    json.loads(r["revealed_prop_ids_json"] or "[]")
+                    if "revealed_prop_ids_json" in r.keys()
+                    else []
+                ),
+                claimed_prop_ids=(
+                    json.loads(r["claimed_prop_ids_json"] or "[]")
+                    if "claimed_prop_ids_json" in r.keys()
+                    else []
+                ),
+                spawned_props=spawned_props_list,
+                location_search_last_turn_depth=search_depths_map,
+                auto_spawned_prop_location_ids=(
+                    json.loads(r["auto_spawned_prop_location_ids_json"] or "[]")
+                    if "auto_spawned_prop_location_ids_json" in r.keys()
                     else []
                 ),
                 parties=parties_list,

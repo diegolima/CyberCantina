@@ -11,8 +11,10 @@ import {
   findNextEnabledIndex,
   formatActiveSlashCommand,
   getActiveSlashHint,
+  getLocationSearchCooldownRemaining,
   getSlashCommandPrefix,
   isExactZeroArgCommandText,
+  SEARCH_COOLDOWN_TURNS,
   SLASH_COMMANDS,
   tryPromoteSlashInput,
   validateSlashCommandInput,
@@ -70,6 +72,7 @@ describe("slashCommands registry & autocomplete", () => {
       "look",
       "narrate",
       "party",
+      "search",
       "wait",
     ]);
     const partySpec = SLASH_COMMANDS.find((c) => c.id === "party");
@@ -92,21 +95,23 @@ describe("slashCommands registry & autocomplete", () => {
       "look",
       "narrate",
       "party",
+      "search",
       "wait",
     ]);
 
     const cQuery = detectSlashAutocompleteContext("/c", 2, null, DEFAULT_CTX);
     expect(cQuery?.items[0].label).toBe("choice");
     expect(cQuery?.items.slice(1).map((i) => i.label)).toEqual([
+      "search",
       "event",
       "narrate",
       "gm",
       "look",
     ]);
-    expect(cQuery?.items[1].matchedAlias).toBe("complication");
-    expect(cQuery?.items[2].matchedAlias).toBe("custom");
-    expect(cQuery?.items[3].matchedAlias).toBe("neuromancer");
-    expect(cQuery?.items[4].matchedAlias).toBe("scene");
+    expect(cQuery?.items[2].matchedAlias).toBe("complication");
+    expect(cQuery?.items[3].matchedAlias).toBe("custom");
+    expect(cQuery?.items[4].matchedAlias).toBe("neuromancer");
+    expect(cQuery?.items[5].matchedAlias).toBe("scene");
 
     const descQuery = detectSlashAutocompleteContext(
       "/desc",
@@ -377,5 +382,42 @@ describe("slashCommands registry & autocomplete", () => {
     expect(
       getActiveSlashHint({ command: "choice", subcommand: null })?.showStrip
     ).toBe(true);
+    expect(
+      getActiveSlashHint({ command: "search", subcommand: null })?.showStrip
+    ).toBe(true);
+  });
+
+  it("enforces /search per-room cooldown and GM Mode bypass", () => {
+    const snapshot = {
+      location_search_last_turn_depth: { loc_a: 3 },
+    };
+    expect(SEARCH_COOLDOWN_TURNS).toBe(5);
+    expect(getLocationSearchCooldownRemaining(snapshot, "loc_a", 4, false)).toBe(4);
+    expect(getLocationSearchCooldownRemaining(snapshot, "loc_a", 7, false)).toBe(1);
+    expect(getLocationSearchCooldownRemaining(snapshot, "loc_a", 8, false)).toBe(0);
+    // Different room is unaffected
+    expect(getLocationSearchCooldownRemaining(snapshot, "loc_b", 4, false)).toBe(0);
+    // GM Mode bypasses cooldown immediately
+    expect(getLocationSearchCooldownRemaining(snapshot, "loc_a", 4, true)).toBe(0);
+
+    const cooldownCtx: SlashCommandAvailabilityContext = {
+      ...DEFAULT_CTX,
+      searchCooldownRemaining: 3,
+    };
+    const stage1Cooldown = detectSlashAutocompleteContext("/", 1, null, cooldownCtx)!;
+    const searchItem = stage1Cooldown.items.find((i) => i.commandId === "search");
+    expect(searchItem?.available).toBe(false);
+    expect(searchItem?.unavailableReason).toBe(
+      "Room searched recently (3 turns remaining)"
+    );
+    expect(validateSlashCommandInput("/search behind desk", null, cooldownCtx)).toBe(
+      "/search: Room searched recently (3 turns remaining)"
+    );
+    expect(
+      validateSlashCommandInput("/search behind desk", null, {
+        ...DEFAULT_CTX,
+        searchCooldownRemaining: 0,
+      })
+    ).toBeNull();
   });
 });

@@ -2202,6 +2202,56 @@ async def commit_staged_import(
                             conn=conn,
                         )
 
+                    for loc in w.get("locations", []):
+                        old_loc_id = loc.get("id")
+                        mapped_loc_id = id_remap.get(old_loc_id) if old_loc_id else None
+                        if not mapped_loc_id:
+                            continue
+                        for p_idx, prop in enumerate(loc.get("props") or []):
+                            if not isinstance(prop, dict):
+                                continue
+                            raw_pname = str(prop.get("name") or "").strip()[:160]
+                            if not raw_pname:
+                                continue
+                            old_pid = prop.get("id")
+                            new_pid = f"prop_{uuid.uuid4().hex[:10]}"
+                            if old_pid:
+                                id_remap[str(old_pid)] = new_pid
+                            raw_lore_id = prop.get("lore_id")
+                            mapped_lore_id = (
+                                id_remap.get(str(raw_lore_id))
+                                if raw_lore_id and str(raw_lore_id) in id_remap
+                                else None
+                            )
+                            raw_flags = [
+                                str(f).strip().lower()
+                                for f in (prop.get("flags") or [])
+                                if str(f).strip().lower() in ("permanent", "artifact")
+                            ]
+                            if mapped_lore_id and "artifact" not in raw_flags:
+                                raw_flags.append("artifact")
+                            elif not mapped_lore_id:
+                                raw_flags = [f for f in raw_flags if f != "artifact"]
+                            conn.execute(
+                                """
+                                INSERT INTO location_props (
+                                    id, world_id, location_id, campaign_id, name, note, flags_json, lore_id, is_hidden, sort_order
+                                )
+                                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    new_pid,
+                                    new_world_id,
+                                    mapped_loc_id,
+                                    raw_pname,
+                                    str(prop.get("note") or "")[:300],
+                                    json.dumps(list(dict.fromkeys(raw_flags))),
+                                    mapped_lore_id,
+                                    1 if prop.get("is_hidden") else 0,
+                                    p_idx,
+                                ),
+                            )
+
                     for edge in w.get("edges", []):
                         old_edge_id = edge.get("id")
                         new_edge_id = f"edge_{uuid.uuid4().hex[:10]}"

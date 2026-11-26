@@ -10,6 +10,7 @@ from typing import Any
 
 from app.config import ModelProfile
 from app.db.repos.base import utc_now_iso
+from app.db.repos.turns import resolve_effective_location_props
 from app.db.repository import CantinaRepository
 from app.engine.game_mechanics import (
     format_mechanics_tool_result,
@@ -521,6 +522,20 @@ async def execute_gm_tool(
                         for ln in loc.lore_nodes
                         if _is_lore_visible(ln, vis, owner_location_id=loc.id)
                     ]
+                    permitted_props = [
+                        {
+                            "id": p.id,
+                            "name": p.name,
+                            "note": p.note,
+                            "is_hidden": p.is_hidden,
+                            "auto_spawned": p.auto_spawned,
+                        }
+                        for p in resolve_effective_location_props(
+                            loc,
+                            vis.bundle.current_world_snapshot,
+                            include_hidden=vis.unlock_lore,
+                        )
+                    ]
                     return (
                         {
                             "kind": "location",
@@ -531,6 +546,7 @@ async def execute_gm_tool(
                             "environmental_tags": list(loc.environmental_tags),
                             "connections": _visible_location_exits_for_gm(loc.id, vis),
                             "local_lore": permitted_lore,
+                            "props": permitted_props,
                         },
                         sources,
                         None,

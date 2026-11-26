@@ -35,6 +35,7 @@ from app.schemas.turn import (
 )
 from app.schemas.world import (
     LocationNode,
+    LocationProp,
     NeighborLocationView,
     WorldRecord,
     format_distance_meters,
@@ -216,6 +217,9 @@ def build_zone4_ephemeral_tail_frame(
     origin_location_id: str | None = None,
     active_parties: list[PartyRecord] | None = None,
     newly_discovered_edge_ids: set[str] | None = None,
+    visible_location_props: list[LocationProp] | None = None,
+    newly_revealed_prop_ids: set[str] | None = None,
+    newly_spawned_prop_ids: set[str] | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     discovered_set = newly_discovered_edge_ids or set()
@@ -370,7 +374,9 @@ def build_zone4_ephemeral_tail_frame(
         if narrative_mode == "describe":
             default_dir = (
                 "Describe the immediate environment, lighting, acoustics, smells, visible points of interest, "
-                "and subtle observable details or lore markers with objective neutrality. Do not speak or decide for the user's character."
+                "and subtle observable details or lore markers with objective neutrality. "
+                "If any visible <location_props> are present, weave them naturally into the scene as subtle observable hints. "
+                "Do not speak or decide for the user's character."
             )
         elif narrative_mode == "advance":
             default_dir = (
@@ -685,13 +691,45 @@ def build_zone4_ephemeral_tail_frame(
         persona_name=persona_snapshot.name if persona_snapshot else None,
     )
 
+    rev_prop_ids = newly_revealed_prop_ids or set()
+    spawn_prop_ids = newly_spawned_prop_ids or set()
+    props_for_prompt = list(visible_location_props or [])
+    location_props_block = ""
+    if props_for_prompt:
+        prop_lines: list[str] = []
+        for prop in props_for_prompt:
+            tags: list[str] = []
+            if prop.id in rev_prop_ids:
+                tags.append("NEWLY DISCOVERED")
+            if prop.id in spawn_prop_ids:
+                tags.append("NEWLY FOUND")
+            tag_prefix = f"[{' / '.join(tags)}] " if tags else ""
+            note_suffix = f": {prop.note}" if prop.note else ""
+            prop_lines.append(f"      - {tag_prefix}{prop.name}{note_suffix}")
+        prop_hint = (
+            "      *(Highlight these visible props naturally as observable environmental hints.)*\n"
+            if (is_narrator and narrative_mode == "describe")
+            else "      *(Portable items currently in this room; narrate discovery of NEWLY DISCOVERED/FOUND items without forcing pickup unless explicitly taken.)*\n"
+        )
+        location_props_block = f"\n    <location_props>\n{prop_hint}" + "\n".join(prop_lines) + "\n    </location_props>"
+
+    search_directive_block = ""
+    if pre_turn.is_search_action:
+        search_directive_block = (
+            "\n  <search_action_directive>\n"
+            "    The protagonist is actively searching this location.\n"
+            "    - Honor the <mechanics_outcome> roll strictly: on Clean/Critical Success, clearly depict discovering any [NEWLY DISCOVERED] or [NEWLY FOUND] items or secrets in the room.\n"
+            "    - On failure (or if no new items/secrets were uncovered), describe a thorough search that turns up nothing new—NEVER invent unprompted hidden items or secret loot on a failed roll.\n"
+            "  </search_action_directive>"
+        )
+
     return (
         "<scene_context>\n"
         f"  <world_clock>{describe_world_timestamp(world_snapshot.world_timestamp)}</world_clock>\n"
         f"  <scene_flags>{scene_flags_text}</scene_flags>\n"
         f"  <active_location name=\"{active_location.name}\">{spatial_hierarchy_block}{parent_container_block}\n"
         f"    {active_location.description}\n"
-        f"    Props & Atmosphere: {env_tags}{local_lore_block}\n"
+        f"    Props & Atmosphere: {env_tags}{local_lore_block}{location_props_block}\n"
         f"  </active_location>{transition_cue_block}{co_present_section}{party_and_movement_section}\n"
         f"  <connected_locations>\n{exits_text}\n  </connected_locations>\n"
         f"  <recalled_memories_and_lore>\n{memories_text}\n  </recalled_memories_and_lore>\n"
@@ -702,6 +740,7 @@ def build_zone4_ephemeral_tail_frame(
         f"{f' ({pre_turn.target_location_hint})' if pre_turn.target_location_hint else ''}\n"
         f"  </auxiliary_prompt_analysis>{rng_section}\n"
         f"{mind_state_section}"
+        f"{search_directive_block}"
         f"{established_cognition_section}"
         f"{player_gear_section}"
         f"{player_phys_section}"
