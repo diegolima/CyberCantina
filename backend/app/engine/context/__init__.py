@@ -46,6 +46,7 @@ from app.engine.context.zone1_static import (
     build_zone1_narrator_system_prompt,
     build_zone1_solo_system_prompt,
     build_zone1_static_system_prompt,
+    build_zone1_storyteller_system_prompt,
     build_zone1_ensemble_system_prompt,
 )
 from app.engine.context.zone2_episodic import (
@@ -99,6 +100,7 @@ __all__ = [
     "build_zone1_narrator_system_prompt",
     "build_zone1_solo_system_prompt",
     "build_zone1_static_system_prompt",
+    "build_zone1_storyteller_system_prompt",
     "build_zone1_ensemble_system_prompt",
     "TurnContextBundle",
     "_chunk_synopsis_fallback",

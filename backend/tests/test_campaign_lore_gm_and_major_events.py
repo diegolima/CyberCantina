@@ -207,6 +207,7 @@ def test_gm_mode_default_off_partial_settings_and_403_guards(
         "describe_on_first_visit": False,
         "unlock_lore": False,
         "auto_spawn_props_on_search_crit": False,
+        "narrative_voice": "first_person",
     }
 
     res2 = client.patch(
@@ -218,6 +219,7 @@ def test_gm_mode_default_off_partial_settings_and_403_guards(
         "describe_on_first_visit": False,
         "unlock_lore": True,
         "auto_spawn_props_on_search_crit": False,
+        "narrative_voice": "first_person",
     }
 
 

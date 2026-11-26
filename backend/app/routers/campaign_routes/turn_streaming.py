@@ -526,6 +526,21 @@ async def _execute_turn_stream_events_unlocked(
     # Decompose user message into public text vs character-directed whispers
     present_char_ids = {c.id for c in present_characters}
     primary_is_present = primary_character.id in present_char_ids
+    campaign_voice = campaign.world_settings.narrative_voice
+    effective_narrative_voice = (
+        "storyteller"
+        if (campaign_voice == "first_person" and not is_narrator and not is_solo and not primary_is_present)
+        else campaign_voice
+    )
+    effective_zone1_template = (
+        effective_prompts.get("narrator_zone1_system")
+        if (is_narrator or is_solo)
+        else (
+            effective_prompts.get("actor_zone1_storyteller_system")
+            if effective_narrative_voice == "storyteller"
+            else effective_prompts.get("actor_zone1_system")
+        )
+    )
     parent_primary_state = parent_turn.character_states.get(
         primary_character.id, parent_turn.character_state
     )
@@ -646,7 +661,7 @@ async def _execute_turn_stream_events_unlocked(
         # Resolve active speaker selected by Phase 1 from characters present in the room
         character = (
             participants_by_id.get(pre_turn.active_speaker_id or "")
-            if pre_turn.active_speaker_id in {c.id for c in present_characters}
+            if pre_turn.active_speaker_id in present_char_ids
             else None
         ) or present_characters[0]
         actor_id = character.id
@@ -761,16 +776,13 @@ async def _execute_turn_stream_events_unlocked(
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
         working_memory_turns=eff_wm_turns,
-        actor_system_prompt_template=(
-            effective_prompts.get("narrator_zone1_system")
-            if (is_narrator or is_solo)
-            else effective_prompts.get("actor_zone1_system")
-        ),
+        actor_system_prompt_template=effective_zone1_template,
         rag_top_k=settings.memory_config.rag_top_k,
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
         decomposed_message=decomposed_msg,
         recall_budget_cognition_tokens=eff_models.recall_budget_cognition_tokens,
+        narrative_voice=effective_narrative_voice,
     )
 
     seen_recall_ids: set[str] = set()
@@ -853,11 +865,7 @@ async def _execute_turn_stream_events_unlocked(
         present_characters=present_characters,
         character_name_map={c.id: c.name for c in participants},
         working_memory_turns=eff_wm_turns,
-        actor_system_prompt_template=(
-            effective_prompts.get("narrator_zone1_system")
-            if (is_narrator or is_solo)
-            else effective_prompts.get("actor_zone1_system")
-        ),
+        actor_system_prompt_template=effective_zone1_template,
         is_narrator=is_narrator,
         is_solo=is_solo,
         narrative_mode=req.narrative_mode if is_narrator else None,
@@ -878,6 +886,12 @@ async def _execute_turn_stream_events_unlocked(
         visible_location_props=visible_location_props,
         newly_revealed_prop_ids=newly_revealed_prop_ids,
         newly_spawned_prop_ids=newly_spawned_prop_ids,
+        narrative_voice=effective_narrative_voice,
+        pov_character=(
+            primary_character
+            if (effective_narrative_voice == "first_person" and primary_is_present)
+            else None
+        ),
     )
 
     is_sentinel_scene = is_narrator or is_solo

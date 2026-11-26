@@ -6,8 +6,9 @@ import {
 } from "../promptRoleDefinitions";
 
 describe("promptRoleDefinitions", () => {
-  const ALL_16_PROMPTS = [
+  const ALL_17_PROMPTS = [
     "actor_zone1_system",
+    "actor_zone1_storyteller_system",
     "narrator_zone1_system",
     "gm_talk_system",
     "gm_codex_draft",
@@ -30,18 +31,18 @@ describe("promptRoleDefinitions", () => {
     expect(roleIds).toEqual(["storytelling", "cognition", "auxiliary", "wizard"]);
   });
 
-  it("maps every one of the 16 system prompt keys to exactly one role without duplicates", () => {
+  it("maps every one of the 17 system prompt keys to exactly one role without duplicates", () => {
     const mappedKeys: string[] = [];
     for (const role of PROMPT_ROLES) {
       for (const key of role.promptKeys) {
-        expect(ALL_16_PROMPTS).toContain(key);
+        expect(ALL_17_PROMPTS).toContain(key);
         expect(mappedKeys).not.toContain(key);
         mappedKeys.push(key);
       }
     }
 
-    expect(mappedKeys.length).toBe(16);
-    for (const key of ALL_16_PROMPTS) {
+    expect(mappedKeys.length).toBe(17);
+    for (const key of ALL_17_PROMPTS) {
       expect(mappedKeys).toContain(key);
     }
   });
@@ -52,7 +53,7 @@ describe("promptRoleDefinitions", () => {
     const auxiliary = PROMPT_ROLES.find((r) => r.id === "auxiliary")!;
     const wizard = PROMPT_ROLES.find((r) => r.id === "wizard")!;
 
-    expect(storytelling.promptKeys).toHaveLength(3);
+    expect(storytelling.promptKeys).toHaveLength(4);
     expect(cognition.promptKeys).toHaveLength(2);
     expect(auxiliary.promptKeys).toHaveLength(7);
     expect(wizard.promptKeys).toHaveLength(4);
@@ -60,6 +61,7 @@ describe("promptRoleDefinitions", () => {
 
   it("correctly resolves role via getRoleForPromptKey", () => {
     expect(getRoleForPromptKey("actor_zone1_system")).toBe("storytelling");
+    expect(getRoleForPromptKey("actor_zone1_storyteller_system")).toBe("storytelling");
     expect(getRoleForPromptKey("narrator_zone1_system")).toBe("storytelling");
     expect(getRoleForPromptKey("gm_talk_system")).toBe("storytelling");
 

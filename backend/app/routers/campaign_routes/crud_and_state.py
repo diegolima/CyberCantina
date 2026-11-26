@@ -158,6 +158,7 @@ async def create_campaign(
             start_focus=req.start_focus,
             skip_turn_0_cognition=True,
             start_in_party_character_ids=start_party_ids,
+            narrative_voice=req.narrative_voice,
         )
         return repo.get_campaign_state_bundle(camp.id, owner_id=current_user.id)
     except KeyError as exc:
@@ -434,6 +435,7 @@ def update_campaign_world_settings(
                 if req.auto_spawn_props_on_search_crit is not None
                 else existing.auto_spawn_props_on_search_crit
             ),
+            narrative_voice=existing.narrative_voice,
         )
         return repo.update_campaign_world_settings(
             campaign_id,

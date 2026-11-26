@@ -20,6 +20,7 @@ import {
 import {
   CharacterRecord,
   CreateCampaignPayload,
+  NarrativeVoice,
   PersonaRecord,
   WorldRecord,
 } from "../types";
@@ -88,6 +89,15 @@ export function resolveInitialCharacterIds(
   return selectable.length > 0 ? [selectable[0].id] : [];
 }
 
+export function resolveDefaultNarrativeVoice(
+  charCount: number,
+  startFocus: "world" | "character"
+): NarrativeVoice {
+  return charCount === 1 && startFocus === "character"
+    ? "first_person"
+    : "storyteller";
+}
+
 export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
   worlds,
   characters,
@@ -142,7 +152,19 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
   const [focusCharId, setFocusCharId] = useState<string>(() =>
     selectedCharIds[0] || (selectableCharacters[0]?.id ?? "")
   );
+  const [hasManualVoiceOverride, setHasManualVoiceOverride] = useState(false);
+  const [narrativeVoiceOverride, setNarrativeVoiceOverride] =
+    useState<NarrativeVoice | null>(null);
   const [showProsePreview, setShowProsePreview] = useState(false);
+
+  const recommendedNarrativeVoice = resolveDefaultNarrativeVoice(
+    selectedCharIds.length,
+    startFocus
+  );
+  const effectiveNarrativeVoice: NarrativeVoice =
+    hasManualVoiceOverride && narrativeVoiceOverride !== null
+      ? narrativeVoiceOverride
+      : recommendedNarrativeVoice;
 
   // --- Submission State ---
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -234,6 +256,7 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
         start_in_party_character_ids: startInPartyIds.filter((cid) =>
           effectiveCharIds.includes(cid)
         ),
+        narrative_voice: effectiveNarrativeVoice,
       });
       onClose();
     } catch (err: any) {
@@ -819,6 +842,147 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
                   </select>
                 </div>
               )}
+
+              {/* Narrative Voice Selector */}
+              <div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    marginBottom: 6,
+                  }}
+                >
+                  <label style={{ fontSize: "0.82rem", fontWeight: 600 }}>
+                    Narrative Voice
+                  </label>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      fontSize: "0.7rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    <Lock size={11} />
+                    Locked for this campaign once launched
+                  </span>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div
+                    onClick={() => {
+                      setHasManualVoiceOverride(true);
+                      setNarrativeVoiceOverride("first_person");
+                    }}
+                    style={{
+                      border:
+                        effectiveNarrativeVoice === "first_person"
+                          ? "1px solid var(--accent-emerald)"
+                          : "1px solid var(--border-subtle)",
+                      background:
+                        effectiveNarrativeVoice === "first_person"
+                          ? "rgba(16, 185, 129, 0.08)"
+                          : "rgba(255, 255, 255, 0.02)",
+                      borderRadius: 8,
+                      padding: "11px 12px",
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 5,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                      <span
+                        style={{
+                          fontWeight: 600,
+                          fontSize: "0.82rem",
+                          color:
+                            effectiveNarrativeVoice === "first_person"
+                              ? "var(--accent-emerald)"
+                              : "var(--text-primary)",
+                        }}
+                      >
+                        1st-Person In-Character
+                      </span>
+                      <input
+                        type="radio"
+                        name="narrativeVoice"
+                        checked={effectiveNarrativeVoice === "first_person"}
+                        onChange={() => {
+                          setHasManualVoiceOverride(true);
+                          setNarrativeVoiceOverride("first_person");
+                        }}
+                      />
+                    </div>
+                    <div style={{ fontSize: "0.73rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                      Narrates as &ldquo;I&rdquo; from the character&apos;s perspective while addressing you as &ldquo;you&rdquo;.
+                    </div>
+                    {recommendedNarrativeVoice === "first_person" && (
+                      <span style={{ fontSize: "0.68rem", color: "var(--accent-emerald)", fontWeight: 600 }}>
+                        Recommended for 1-character greeting starts
+                      </span>
+                    )}
+                  </div>
+
+                  <div
+                    onClick={() => {
+                      setHasManualVoiceOverride(true);
+                      setNarrativeVoiceOverride("storyteller");
+                    }}
+                    style={{
+                      border:
+                        effectiveNarrativeVoice === "storyteller"
+                          ? "1px solid var(--accent-emerald)"
+                          : "1px solid var(--border-subtle)",
+                      background:
+                        effectiveNarrativeVoice === "storyteller"
+                          ? "rgba(16, 185, 129, 0.08)"
+                          : "rgba(255, 255, 255, 0.02)",
+                      borderRadius: 8,
+                      padding: "11px 12px",
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 5,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                      <span
+                        style={{
+                          fontWeight: 600,
+                          fontSize: "0.82rem",
+                          color:
+                            effectiveNarrativeVoice === "storyteller"
+                              ? "var(--accent-emerald)"
+                              : "var(--text-primary)",
+                        }}
+                      >
+                        3rd-Person Storyteller
+                      </span>
+                      <input
+                        type="radio"
+                        name="narrativeVoice"
+                        checked={effectiveNarrativeVoice === "storyteller"}
+                        onChange={() => {
+                          setHasManualVoiceOverride(true);
+                          setNarrativeVoiceOverride("storyteller");
+                        }}
+                      />
+                    </div>
+                    <div style={{ fontSize: "0.73rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                      Portrays the NPC cast in 3rd person while addressing you as &ldquo;you&rdquo;.
+                    </div>
+                    {recommendedNarrativeVoice === "storyteller" && (
+                      <span style={{ fontSize: "0.68rem", color: "var(--accent-emerald)", fontWeight: 600 }}>
+                        Recommended for multi-character or world starts
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
 
               {/* Collapsed Prose Preview Accordion */}
               <div

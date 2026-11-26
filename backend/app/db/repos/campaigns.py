@@ -12,12 +12,23 @@ from app.schemas.turn import (
     CampaignRecord,
     CampaignStateBundle,
     CampaignWorldSettings,
+    NarrativeVoice,
     PostTurnStateDelta,
     PreTurnAnalysis,
     WorldStateSnapshot,
 )
 from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
 from app.db.repos.base import _delete_campaign_rows, _dump_care_state_json, utc_now_iso
+
+
+def resolve_default_narrative_voice(
+    char_count: int,
+    start_focus: str | None,
+) -> NarrativeVoice:
+    """Resolve default campaign narrative voice from character count and start focus."""
+    if char_count == 1 and (start_focus or "character") == "character":
+        return "first_person"
+    return "storyteller"
 
 
 class CampaignsMixin:
@@ -63,6 +74,7 @@ class CampaignsMixin:
         start_focus: str | None = None,
         skip_turn_0_cognition: bool = True,
         start_in_party_character_ids: list[str] | None = None,
+        narrative_voice: NarrativeVoice | None = None,
     ) -> CampaignRecord:
         """Create a new campaign and initialize Turn 0 (opening scene snapshot)."""
         camp_id = campaign_id or f"camp_{uuid.uuid4().hex[:10]}"
@@ -129,6 +141,13 @@ class CampaignsMixin:
         ]
         for party_cid in valid_start_party_ids:
             loc_map[party_cid] = primary_loc_id
+        effective_actor_id = actor_id or character.id
+        effective_start_focus = start_focus or (
+            "world" if effective_actor_id == "__narrator__" else "character"
+        )
+        effective_narrative_voice = narrative_voice or resolve_default_narrative_voice(
+            len(all_char_ids), effective_start_focus
+        )
         camp_world_settings = CampaignWorldSettings(
             describe_on_first_visit=getattr(
                 world.global_rules, "describe_on_first_visit", True
@@ -136,6 +155,7 @@ class CampaignsMixin:
             auto_spawn_props_on_search_crit=getattr(
                 world.global_rules, "auto_spawn_props_on_search_crit", False
             ),
+            narrative_voice=effective_narrative_voice,
         )
 
         conn = self._connect()
@@ -191,10 +211,6 @@ class CampaignsMixin:
                 f"\"You're late,\" {character.name} says quietly, eyes scanning the room."
             )
 
-        effective_actor_id = actor_id or character.id
-        effective_start_focus = start_focus or (
-            "world" if effective_actor_id == "__narrator__" else "character"
-        )
         char_init_msg = (character.initial_message or "").strip()
         has_custom_opening = bool(opening_prose and opening_prose.strip())
         skip_turn_0_location_card = (not has_custom_opening) and (
@@ -489,13 +505,32 @@ class CampaignsMixin:
                 if not persona_id:
                     persona_id = default_p.id
             world_settings = CampaignWorldSettings()
+            needs_voice_inference = True
             if "world_settings_json" in r.keys() and r["world_settings_json"]:
                 try:
-                    world_settings = CampaignWorldSettings.model_validate_json(
-                        r["world_settings_json"]
-                    )
+                    raw_ws = json.loads(r["world_settings_json"])
+                    if isinstance(raw_ws, dict) and raw_ws.get("narrative_voice") in (
+                        "first_person",
+                        "storyteller",
+                    ):
+                        needs_voice_inference = False
+                    world_settings = CampaignWorldSettings.model_validate(raw_ws)
                 except Exception:
                     pass
+            if needs_voice_inference:
+                inferred_voice: NarrativeVoice = "first_person"
+                if len(participant_ids) > 1:
+                    inferred_voice = "storyteller"
+                else:
+                    turn0_row = conn.execute(
+                        "SELECT actor_id FROM turn_nodes WHERE campaign_id = ? AND depth_index = 0 LIMIT 1",
+                        (campaign_id,),
+                    ).fetchone()
+                    if turn0_row and turn0_row["actor_id"] == "__narrator__":
+                        inferred_voice = "storyteller"
+                world_settings = world_settings.model_copy(
+                    update={"narrative_voice": inferred_voice}
+                )
             joined_portrait_url: str | None = None
             raw_portraits_json = (
                 r["joined_character_portraits_json"]

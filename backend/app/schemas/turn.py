@@ -440,12 +440,16 @@ class WorldStateSnapshot(BaseModel):
     parties: list[PartyRecord] = Field(default_factory=list)
 
 
+NarrativeVoice = Literal["first_person", "storyteller"]
+
+
 class CampaignWorldSettings(BaseModel):
     """Per-campaign world behavior settings copied from base world defaults."""
 
     describe_on_first_visit: bool = True
     unlock_lore: bool = False
     auto_spawn_props_on_search_crit: bool = False
+    narrative_voice: NarrativeVoice = "first_person"
 
 
 class FirstVisitDescriptionCard(BaseModel):

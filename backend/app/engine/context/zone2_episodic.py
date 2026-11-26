@@ -22,6 +22,7 @@ from app.schemas.persona import (
 )
 from app.schemas.turn import (
     EpisodicChunkRecord,
+    NarrativeVoice,
     PreTurnAnalysis,
     RecalledMemoryItem,
     TurnNodeRecord,
@@ -76,6 +77,7 @@ class TurnContextBundle:
     decomposed_message: DecomposedUserMessage | None = None
     recall_budget_cognition_tokens: int | None = None
     active_parties: list[PartyRecord] = field(default_factory=list)
+    narrative_voice: NarrativeVoice = "first_person"
 
 
 def _chunk_synopsis_fallback(chunk: EpisodicChunkRecord) -> str:

@@ -21,6 +21,7 @@ from app.schemas.persona import (
 from app.schemas.telemetry import Phase4BudgetReport
 from app.schemas.turn import (
     EpisodicChunkRecord,
+    NarrativeVoice,
     PreTurnAnalysis,
     RecalledMemoryItem,
     TurnNodeRecord,
@@ -47,6 +48,7 @@ from app.engine.context.zone1_static import (
     build_zone1_narrator_system_prompt,
     build_zone1_solo_system_prompt,
     build_zone1_static_system_prompt,
+    build_zone1_storyteller_system_prompt,
 )
 from app.engine.context.zone2_episodic import (
     TurnContextBundle,
@@ -83,6 +85,7 @@ async def resolve_phase2_turn_context(
     current_player_state: PersonaTurnStateSnapshot | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
     recall_budget_cognition_tokens: int | None = None,
+    narrative_voice: NarrativeVoice = "first_person",
 ) -> TurnContextBundle:
     """Phase 2: Scoped RAG & Context Resolution.
     Computes query embeddings once and partitions memory items between shared scene items
@@ -216,6 +219,7 @@ async def resolve_phase2_turn_context(
         decomposed_message=decomp,
         recall_budget_cognition_tokens=recall_budget_cognition_tokens,
         active_parties=list(leaf_turn.world_snapshot.parties or []),
+        narrative_voice=narrative_voice,
     )
 
 
@@ -257,8 +261,11 @@ def assemble_four_zone_messages(
     visible_location_props: list[LocationProp] | None = None,
     newly_revealed_prop_ids: set[str] | None = None,
     newly_spawned_prop_ids: set[str] | None = None,
+    narrative_voice: NarrativeVoice | None = None,
+    pov_character: CharacterRecord | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
+    zone_pov_char = pov_character or character
     eff_is_solo = bool(
         is_solo
         or (not is_narrator and present_characters is not None and len(present_characters) == 0)
@@ -267,6 +274,22 @@ def assemble_four_zone_messages(
         zone1_prompt = build_zone1_narrator_system_prompt(world, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
     elif eff_is_solo:
         zone1_prompt = build_zone1_solo_system_prompt(world, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
+    elif narrative_voice == "storyteller":
+        zone1_prompt = build_zone1_storyteller_system_prompt(
+            world,
+            present_characters or [character],
+            prompt_template=actor_system_prompt_template,
+            persona_snapshot=persona_snapshot,
+        )
+    elif narrative_voice == "first_person":
+        co_present = [c for c in (present_characters or []) if c.id != zone_pov_char.id]
+        zone1_prompt = build_zone1_static_system_prompt(
+            world,
+            zone_pov_char,
+            prompt_template=actor_system_prompt_template,
+            persona_snapshot=persona_snapshot,
+            co_present_characters=co_present or None,
+        )
     elif present_characters and len(present_characters) > 1:
         zone1_prompt = build_zone1_ensemble_system_prompt(world, present_characters, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
     else:
@@ -278,12 +301,21 @@ def assemble_four_zone_messages(
 
     # Determine where Working Memory (Zone 3) starts, filtering to turns where character was in the room
     max_summarized_depth = max((c.end_turn_depth for c in episodic_chunks), default=-1)
+    storyteller_cast = present_characters or [character]
     unsummarized_turns = [
         t
         for t in branch_turns
         if t.depth_index > max_summarized_depth
         and t.actor_id != "__arrival__"
-        and (is_narrator or eff_is_solo or was_character_present_on_turn(t, character.id))
+        and (
+            is_narrator
+            or eff_is_solo
+            or (
+                any(was_character_present_on_turn(t, c.id) for c in storyteller_cast)
+                if narrative_voice == "storyteller"
+                else was_character_present_on_turn(t, zone_pov_char.id)
+            )
+        )
     ]
     wm_limit = (
         working_memory_turns
@@ -299,16 +331,26 @@ def assemble_four_zone_messages(
     for c in present_characters or []:
         name_lookup[c.id] = c.name
     name_lookup[character.id] = character.name
+    name_lookup[zone_pov_char.id] = zone_pov_char.name
 
     active_actor_id = (
         "__narrator__"
         if is_narrator
-        else ("__solo__" if eff_is_solo else character.id)
+        else ("__solo__" if eff_is_solo else zone_pov_char.id)
     )
     zone3_turn_entries: list[list[dict[str, str]]] = []
     for turn in working_window:
         prose_text = turn.raw_prose
-        if turn.actor_id != active_actor_id and turn.actor_id in name_lookup:
+        is_pov_anchored_turn = (
+            narrative_voice == "first_person"
+            and turn.actor_id not in ("__narrator__", "__solo__", "__arrival__")
+            and was_character_present_on_turn(turn, zone_pov_char.id)
+        )
+        if (
+            turn.actor_id != active_actor_id
+            and turn.actor_id in name_lookup
+            and not is_pov_anchored_turn
+        ):
             prose_text = f"[{name_lookup[turn.actor_id]}]: {turn.raw_prose}"
         elif (
             turn.actor_id in ("__narrator__", "__solo__")
@@ -321,8 +363,8 @@ def assemble_four_zone_messages(
             if (is_narrator or eff_is_solo)
             else filter_user_message_for_character(
                 turn.user_message,
-                target_character_id=character.id,
-                campaign_characters=present_characters or [character],
+                target_character_id=zone_pov_char.id,
+                campaign_characters=present_characters or [zone_pov_char],
             )
         )
 
@@ -340,8 +382,8 @@ def assemble_four_zone_messages(
     leaf_turn = branch_turns[-1]
     target_elapsed = leaf_turn.world_snapshot.campaign_elapsed_minutes
     char_state = _project_snapshot_to_elapsed(
-        resolve_character_previous_state(branch_turns, character, active_location.id),
-        character,
+        resolve_character_previous_state(branch_turns, zone_pov_char, active_location.id),
+        zone_pov_char,
         target_elapsed,
     )
     resolved_all_states = (
@@ -353,7 +395,7 @@ def assemble_four_zone_messages(
                 c,
                 target_elapsed,
             )
-            for c in (present_characters or [character])
+            for c in (present_characters or [zone_pov_char])
         }
     )
     eff_recall_prose_budget = (
@@ -368,7 +410,7 @@ def assemble_four_zone_messages(
     )
     zone4_content = build_zone4_ephemeral_tail_frame(
         user_message=user_message,
-        character=character,
+        character=zone_pov_char,
         world_snapshot=leaf_turn.world_snapshot,
         character_state=char_state,
         active_location=active_location,
@@ -398,6 +440,7 @@ def assemble_four_zone_messages(
         visible_location_props=visible_location_props,
         newly_revealed_prop_ids=newly_revealed_prop_ids,
         newly_spawned_prop_ids=newly_spawned_prop_ids,
+        narrative_voice=narrative_voice,
     )
     zone4_msg = {"role": "user", "content": zone4_content}
 

@@ -182,11 +182,80 @@ def build_zone1_solo_system_prompt(
     )
 
 
+def _format_cast_character_entry(c: CharacterRecord) -> str:
+    """Format a single character's static sheet for multi-character or Storyteller Zone 1 prompts."""
+    style_prefix = f"  - Style: {', '.join(c.communication_style)}\n" if c.communication_style else ""
+    v_lines = style_prefix + "\n".join(f"  - [{v.context}]: {v.snippet}" for v in c.voice_anchors)
+    v_lines = v_lines.strip() or "  - None"
+
+    appearance_parts: list[str] = []
+    if c.build_and_height:
+        appearance_parts.append(f"Build: {c.build_and_height}")
+    if c.distinctive_features:
+        appearance_parts.append(f"Features: {', '.join(c.distinctive_features)}")
+    if c.posture:
+        appearance_parts.append(f"Habitual Bearing: {c.posture}")
+    if c.modifications:
+        seen_features = {f.strip().lower() for f in c.distinctive_features}
+        extra_mods = [
+            m.strip()
+            for m in c.modifications
+            if m.strip() and m.strip().lower() not in seen_features
+        ]
+        if extra_mods:
+            appearance_parts.append(f"Cyberware: {', '.join(extra_mods)}")
+    if c.mannerisms:
+        appearance_parts.append(f"Tells: {', '.join(c.mannerisms)}")
+    if c.visual_aesthetic:
+        appearance_parts.append(f"Visual Aesthetic: {c.visual_aesthetic}")
+    if (
+        not appearance_parts
+        and c.physical_appearance.strip()
+        and c.physical_appearance.strip() != c.character_bio.strip()
+    ):
+        appearance_parts.append(c.physical_appearance.strip())
+    app_text = f"  Appearance: {'; '.join(appearance_parts)}\n" if appearance_parts else ""
+
+    identity_items: list[str] = []
+    if c.species and c.species.lower() != "human":
+        identity_items.append(f"Species: {c.species}")
+    if c.sex:
+        identity_items.append(f"Sex: {c.sex}")
+    if c.pronouns:
+        identity_items.append(f"Pronouns: {c.pronouns}")
+    if c.age:
+        identity_items.append(f"Age: {c.age}")
+    demo_line = f"Demographics: {', '.join(identity_items)}\n" if identity_items else ""
+    bio_line = f"Bio: {c.character_bio.strip()}\n" if c.character_bio.strip() else ""
+
+    persona_parts: list[str] = []
+    if c.personality_traits:
+        persona_parts.append(f"Traits: {', '.join(c.personality_traits)}")
+    if c.moral_code:
+        persona_parts.append(f"Boundaries: {', '.join(c.moral_code)}")
+    if c.quirks_flaws:
+        persona_parts.append(f"Quirks & Flaws: {', '.join(c.quirks_flaws)}")
+    persona_parts.append(c.core_persona)
+    c_persona = " | ".join(persona_parts)
+
+    return (
+        f"=== CHARACTER: {c.name} (id='{c.id}') ===\n"
+        f"Tagline: {c.tagline}\n"
+        f"{demo_line}"
+        f"{bio_line}"
+        f"{app_text}"
+        f"Persona: {c_persona}\n"
+        f"Drive: {c.baseline_psyche.core_drive} | Fear: {c.baseline_psyche.core_fear}\n"
+        f"Voice & Mannerism Anchors:\n{v_lines}"
+    )
+
+
 def build_zone1_static_system_prompt(
     world: WorldRecord,
     character: CharacterRecord,
     prompt_template: str | None = None,
     persona_snapshot: PersonaRecord | None = None,
+    co_present_characters: list[CharacterRecord] | None = None,
 ) -> str:
     """Zone 1: Strictly static system prompt prefix to guarantee 100% KV-cache hits across turns."""
     style_str = f"Communication Style: {', '.join(character.communication_style)}\n" if character.communication_style else ""
@@ -266,6 +335,54 @@ def build_zone1_static_system_prompt(
         core_fear=character.baseline_psyche.core_fear,
         voice_lines=voice_lines,
     )
+    rendered = base + format_zone1_player_protagonist_block(persona_snapshot)
+    others = sorted(
+        [c for c in (co_present_characters or []) if c.id != character.id],
+        key=lambda c: c.id,
+    )
+    if others:
+        co_cast_text = "\n\n".join(_format_cast_character_entry(oc) for oc in others)
+        rendered += (
+            f"\n\n=== CO-PRESENT CHARACTERS & 1ST-PERSON POV ANCHOR ===\n"
+            f"You MUST remain strictly in {character.name}'s 1st-person (\"I\") point of view for the entire response.\n"
+            f"Other characters present in the scene:\n{co_cast_text}\n"
+            f"- Render co-present characters' spoken dialogue (\"quotes\") and visible physical actions (*italics*) "
+            f"strictly as observed externally by {character.name}.\n"
+            f"- NEVER shift \"I\" to another character, NEVER narrate another character's unexpressed inner thoughts "
+            f"as telepathy, and address the player strictly in 2nd person (\"you\")."
+        )
+    return rendered
+
+
+def build_zone1_storyteller_system_prompt(
+    world: WorldRecord,
+    present_characters: list[CharacterRecord],
+    prompt_template: str | None = None,
+    persona_snapshot: PersonaRecord | None = None,
+) -> str:
+    """Zone 1: Static 3rd-person Storyteller prefix for single- or multi-character scenes.
+
+    Sorts present characters canonically by id to maximize KV-cache reuse across turns.
+    """
+    if not present_characters:
+        return build_zone1_narrator_system_prompt(
+            world,
+            prompt_template=prompt_template,
+            persona_snapshot=persona_snapshot,
+        )
+
+    sorted_cast = sorted(present_characters, key=lambda c: c.id)
+    cast_section = "\n\n".join(_format_cast_character_entry(c) for c in sorted_cast)
+    template = prompt_template or get_default_prompt("actor_zone1_storyteller_system")
+    base = render_template(
+        template,
+        world_name=world.name,
+        genre=world.global_rules.genre,
+        tone=world.global_rules.tone,
+        setting_overview=world.global_rules.setting_overview,
+        tech_or_magic_rules=world.global_rules.tech_or_magic_rules,
+        cast_section=cast_section,
+    )
     return base + format_zone1_player_protagonist_block(persona_snapshot)
 
 
@@ -276,9 +393,9 @@ def build_zone1_ensemble_system_prompt(
     persona_snapshot: PersonaRecord | None = None,
 ) -> str:
     """Zone 1: Static prefix for multi-character ensemble prose generation.
+
     If len(present_characters) == 1: uses standard build_zone1_static_system_prompt.
-    If len > 1: sorts characters by canonical id to maximize KV-cache reuse,
-    rendering an ensemble cast sheet with persona, drive, fear, and voice anchors.
+    If len > 1: delegates to Storyteller Zone 1 builder sorted canonically by character id.
     """
     if len(present_characters) <= 1:
         single_char = present_characters[0] if present_characters else None
@@ -286,76 +403,9 @@ def build_zone1_ensemble_system_prompt(
             return build_zone1_narrator_system_prompt(world, prompt_template=prompt_template, persona_snapshot=persona_snapshot)
         return build_zone1_static_system_prompt(world, single_char, prompt_template=prompt_template, persona_snapshot=persona_snapshot)
 
-    # Multi-character ensemble: sort strictly by canonical id
-    sorted_cast = sorted(present_characters, key=lambda c: c.id)
-    cast_sections: list[str] = []
-    for c in sorted_cast:
-        style_prefix = f"  - Style: {', '.join(c.communication_style)}\n" if c.communication_style else ""
-        v_lines = style_prefix + "\n".join(f"  - [{v.context}]: {v.snippet}" for v in c.voice_anchors)
-        v_lines = v_lines.strip() or "  - None"
-
-        appearance_parts: list[str] = []
-        if c.build_and_height:
-            appearance_parts.append(f"Build: {c.build_and_height}")
-        if c.distinctive_features:
-            appearance_parts.append(f"Features: {', '.join(c.distinctive_features)}")
-        if c.posture:
-            appearance_parts.append(f"Habitual Bearing: {c.posture}")
-        if c.modifications:
-            seen_features = {f.strip().lower() for f in c.distinctive_features}
-            extra_mods = [
-                m.strip()
-                for m in c.modifications
-                if m.strip() and m.strip().lower() not in seen_features
-            ]
-            if extra_mods:
-                appearance_parts.append(f"Cyberware: {', '.join(extra_mods)}")
-        if c.mannerisms:
-            appearance_parts.append(f"Tells: {', '.join(c.mannerisms)}")
-        if (
-            not appearance_parts
-            and c.physical_appearance.strip()
-            and c.physical_appearance.strip() != c.character_bio.strip()
-        ):
-            appearance_parts.append(c.physical_appearance.strip())
-        app_text = f"  Appearance: {'; '.join(appearance_parts)}\n" if appearance_parts else ""
-
-        persona_parts = []
-        if c.personality_traits:
-            persona_parts.append(f"Traits: {', '.join(c.personality_traits)}")
-        persona_parts.append(c.core_persona)
-        c_persona = " | ".join(persona_parts)
-
-        cast_sections.append(
-            f"=== CHARACTER: {c.name} (id='{c.id}') ===\n"
-            f"Tagline: {c.tagline}\n"
-            f"{app_text}"
-            f"Persona: {c_persona}\n"
-            f"Drive: {c.baseline_psyche.core_drive} | Fear: {c.baseline_psyche.core_fear}\n"
-            f"Voice & Mannerism Anchors:\n{v_lines}"
-        )
-    ensemble_cast_text = "\n\n".join(cast_sections)
-
-    protagonist_block = format_zone1_player_protagonist_block(persona_snapshot)
-
-    return (
-        f"You are the narrative ensemble writer in an interactive story.\n\n"
-        f"=== WORLD SETTING: {world.name} ===\n"
-        f"Genre & Tone: {world.global_rules.genre} — {world.global_rules.tone}\n"
-        f"Overview: {world.global_rules.setting_overview}\n"
-        f"World Rules: {world.global_rules.tech_or_magic_rules}\n\n"
-        f"=== CAST PRESENT IN ROOM ===\n"
-        f"{ensemble_cast_text}"
-        f"{protagonist_block}\n\n"
-        f"=== NARRATIVE PROTOCOL ===\n"
-        f"Write rich, immersive, multi-character narrative prose capturing physical actions (*italics*) "
-        f"and spoken dialogue (\"quotes\") for the present characters. "
-        f"Honor each character's voice anchors, active thoughts, feelings, and tactical plans provided in the turn context. "
-        f"When characters act under a dice check, strictly enforce the mechanical outcome tier in narrative prose:\n"
-        f"- Critical Failure: The action catastrophically backfires with severe consequences. Never narrate success.\n"
-        f"- Failure with Consequences: The attempt fails with noticeable resistance or secondary complications.\n"
-        f"- Simple Failure: The attempt cleanly fails without piling on extra disasters.\n"
-        f"- Clean Success: The attempt succeeds smoothly as intended.\n"
-        f"- Critical Success: The attempt succeeds with outstanding flair and extra advantage.\n"
-        f"Do NOT output <cognition> blocks. Never speak or act on behalf of the user."
+    return build_zone1_storyteller_system_prompt(
+        world,
+        present_characters,
+        prompt_template=prompt_template,
+        persona_snapshot=persona_snapshot,
     )

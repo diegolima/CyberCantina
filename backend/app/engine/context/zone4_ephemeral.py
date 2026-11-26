@@ -220,6 +220,7 @@ def build_zone4_ephemeral_tail_frame(
     visible_location_props: list[LocationProp] | None = None,
     newly_revealed_prop_ids: set[str] | None = None,
     newly_spawned_prop_ids: set[str] | None = None,
+    narrative_voice: str | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     discovered_set = newly_discovered_edge_ids or set()
@@ -517,13 +518,23 @@ def build_zone4_ephemeral_tail_frame(
                     f"  </character_active_cognition>"
                 )
             if cog_blocks:
+                if narrative_voice == "first_person":
+                    multi_actor_dir = (
+                        "    CRITICAL: Internal thoughts, emotional feelings, and tactical plans have already been established above in <character_active_cognition>.\n"
+                        f"    Write strictly from {character.name}'s 1st-person (\"I\") POV, executing {character.name}'s plan while rendering co-present characters' spoken dialogue and actions strictly as observable outward behavior (never narrate their private thoughts telepathically).\n"
+                        "    Address the player in 2nd person (\"you\"). Do NOT output <cognition> blocks.\n"
+                    )
+                else:
+                    multi_actor_dir = (
+                        "    CRITICAL: Internal thoughts, emotional feelings, and tactical plans for the characters have already been established above in <character_active_cognition>.\n"
+                        "    Do NOT output <cognition> blocks. Output ONLY immersive 3rd-person Storyteller prose portraying the NPC(s) executing these plans while addressing the player in 2nd person (\"you\").\n"
+                    )
                 established_cognition_section = (
                     "\n"
                     + "\n".join(cog_blocks)
                     + "\n  <actor_directive>\n"
-                    "    CRITICAL: Internal thoughts, emotional feelings, and tactical plans for the characters have already been established above in <character_active_cognition>.\n"
-                    "    Do NOT output <cognition> blocks. Output ONLY immersive, in-character narrative prose executing these plans.\n"
-                    "  </actor_directive>"
+                    + multi_actor_dir
+                    + "  </actor_directive>"
                 )
         elif established_cognition:
             ec_roll = pre_turn.character_rolls.get(character.id) or (
@@ -538,6 +549,16 @@ def build_zone4_ephemeral_tail_frame(
             ec_agency_attr = f' agency="{established_cognition.feeling_agency}"' if established_cognition.feeling_agency else ""
             ec_threat_attr = f' threat="{established_cognition.scene_threat}"' if established_cognition.scene_threat else ""
             ec_coping_attr = f' coping="{established_cognition.scene_coping}"' if established_cognition.scene_coping else ""
+            if narrative_voice == "storyteller":
+                single_actor_dir = (
+                    f"    CRITICAL: {character.name}'s internal thoughts and immediate plan for this turn have already been established above in <character_active_cognition>.\n"
+                    f"    Do NOT output <cognition> blocks. Output ONLY immersive 3rd-person Storyteller prose portraying {character.name} embodying this feeling and executing this plan while addressing the player in 2nd person (\"you\").\n"
+                )
+            else:
+                single_actor_dir = (
+                    "    CRITICAL: Your character's internal thoughts and immediate plan for this turn have already been established above in <character_active_cognition>.\n"
+                    "    Do NOT output <cognition> blocks. Output ONLY immersive, in-character narrative prose embodying this feeling and executing this plan, addressing the player in 2nd person (\"you\").\n"
+                )
             established_cognition_section = (
                 f'\n  <character_active_cognition character="{character.name}"{ec_roll_attr}>\n'
                 f"    <recall>\n{established_cognition.recall}\n    </recall>\n"
@@ -546,8 +567,7 @@ def build_zone4_ephemeral_tail_frame(
                 f"    <plan>\n{established_cognition.plan}\n    </plan>\n"
                 f"  </character_active_cognition>\n"
                 f"  <actor_directive>\n"
-                f"    CRITICAL: Your character's internal thoughts and immediate plan for this turn have already been established above in <character_active_cognition>.\n"
-                f"    Do NOT output <cognition> blocks. Output ONLY immersive, in-character narrative prose embodying this feeling and executing this plan.\n"
+                f"{single_actor_dir}"
                 f"  </actor_directive>"
             )
 

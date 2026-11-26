@@ -22,6 +22,7 @@ export const PROMPT_ROLES: PromptRoleMeta[] = [
     icon: BookOpen,
     promptKeys: [
       "actor_zone1_system",
+      "actor_zone1_storyteller_system",
       "narrator_zone1_system",
       "gm_talk_system",
     ],

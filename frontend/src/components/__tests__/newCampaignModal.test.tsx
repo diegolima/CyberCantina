@@ -2,10 +2,12 @@ import ReactDOMServer from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   NewCampaignModal,
+  resolveDefaultNarrativeVoice,
   resolveInitialCharacterIds,
   resolveInitialPersonaId,
   resolveInitialWorldId,
 } from "../NewCampaignModal";
+import { WorldInspectorModal } from "../world/WorldInspectorModal";
 import { CharacterRecord, PersonaRecord, WorldRecord } from "../../types";
 
 function makeWorld(overrides: Partial<WorldRecord> = {}): WorldRecord {
@@ -142,5 +144,46 @@ describe("NewCampaignModal stale/pending_deletion selection safety", () => {
     expect(html).toContain('value="world_v2"');
     expect(html).not.toContain('value="world_old"');
     expect(html).not.toContain("The Green Lie (Old)");
+  });
+
+  it("resolves default narrative voice from character count and opening focus", () => {
+    expect(resolveDefaultNarrativeVoice(1, "character")).toBe("first_person");
+    expect(resolveDefaultNarrativeVoice(1, "world")).toBe("storyteller");
+    expect(resolveDefaultNarrativeVoice(2, "character")).toBe("storyteller");
+    expect(resolveDefaultNarrativeVoice(3, "world")).toBe("storyteller");
+  });
+
+  it("displays locked Narrative Voice read-only in WorldInspectorModal campaign settings", () => {
+    const world = makeWorld();
+    const storytellerHtml = ReactDOMServer.renderToStaticMarkup(
+      <WorldInspectorModal
+        world={world}
+        mode="campaign"
+        initialTab="settings"
+        campaignWorldSettings={{
+          describe_on_first_visit: true,
+          narrative_voice: "storyteller",
+        }}
+        onClose={() => {}}
+        onSaved={() => {}}
+      />
+    );
+    expect(storytellerHtml).toContain("Narrative Voice (Locked)");
+    expect(storytellerHtml).toContain("3rd-Person Storyteller");
+
+    const firstPersonHtml = ReactDOMServer.renderToStaticMarkup(
+      <WorldInspectorModal
+        world={world}
+        mode="campaign"
+        initialTab="settings"
+        campaignWorldSettings={{
+          describe_on_first_visit: true,
+          narrative_voice: "first_person",
+        }}
+        onClose={() => {}}
+        onSaved={() => {}}
+      />
+    );
+    expect(firstPersonHtml).toContain("1st-Person In-Character");
   });
 });

@@ -75,10 +75,13 @@ export interface WorldStateSnapshot {
   parties?: PartyRecord[];
 }
 
+export type NarrativeVoice = "first_person" | "storyteller";
+
 export interface CampaignWorldSettings {
   describe_on_first_visit: boolean;
   unlock_lore?: boolean;
   auto_spawn_props_on_search_crit?: boolean;
+  narrative_voice?: NarrativeVoice;
 }
 
 export interface MajorEventRecord {
@@ -575,6 +578,7 @@ export interface CreateCampaignPayload {
   focus_character_id?: string | null;
   character_locations?: Record<string, string>;
   start_in_party_character_ids?: string[];
+  narrative_voice?: NarrativeVoice;
 }
 
 export interface CampaignStateBundle {

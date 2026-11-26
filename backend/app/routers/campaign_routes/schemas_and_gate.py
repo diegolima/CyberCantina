@@ -7,7 +7,7 @@ import logging
 
 from app.schemas.character import ItemFlag
 from app.schemas.gm import GmCodexProposal
-from app.schemas.turn import CampaignStateBundle
+from app.schemas.turn import CampaignStateBundle, NarrativeVoice
 from app.schemas.world import (
     DEFAULT_INTERIOR_DISTANCE_METERS,
     MAX_EDGE_DISTANCE_METERS,
@@ -52,6 +52,7 @@ class CampaignCreateRequest(BaseModel):
     opening_prose: str | None = None
     start_focus: Literal["world", "character"] = "character"
     focus_character_id: str | None = None
+    narrative_voice: NarrativeVoice | None = None
 
 
 class CampaignAddCharacterRequest(BaseModel):

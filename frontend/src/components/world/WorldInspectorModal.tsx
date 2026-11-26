@@ -1298,6 +1298,35 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 : "Default world settings inherited when launching new campaigns. Updating this toggle never alters already running campaigns."}
             </div>
 
+            {isCampaignMode && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: 8,
+                  padding: "12px 14px",
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                    Narrative Voice (Locked)
+                  </span>
+                  <span style={{ fontSize: "0.76rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                    Selected when this campaign launched and kept fixed across all turns.
+                  </span>
+                </div>
+                <span className="badge" style={{ flexShrink: 0 }}>
+                  {campaignWorldSettings?.narrative_voice === "storyteller"
+                    ? "3rd-Person Storyteller"
+                    : "1st-Person In-Character"}
+                </span>
+              </div>
+            )}
+
             <label
               style={{
                 display: "flex",
