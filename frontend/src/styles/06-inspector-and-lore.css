@@ -241,8 +241,49 @@
   color: var(--accent-cyan);
 }
 
+.inspector-minimap-svg {
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  cursor: zoom-in;
+}
+
+.minimap-container-pill {
+  cursor: zoom-in;
+}
+
+.minimap-container-pill rect {
+  transition: fill 0.15s ease, stroke 0.15s ease;
+}
+
+.minimap-container-pill:hover rect {
+  fill: rgba(245, 158, 11, 0.18);
+  stroke: rgba(245, 158, 11, 0.72);
+}
+
 .minimap-node-hit-target {
   cursor: pointer;
+}
+
+.inspector-preview-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.inspector-preview-focus-btn {
+  padding: 2px 5px;
+  color: var(--text-secondary);
+}
+
+.inspector-preview-focus-btn:hover {
+  color: var(--accent-cyan);
+}
+
+.inspector-preview-focus-btn:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 1px;
 }
 
 /* Inspector: character rows */

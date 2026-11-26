@@ -1,4 +1,4 @@
-import React, { useId } from "react";
+import React, { useId, useRef } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -27,7 +27,11 @@ import {
   formatExitTravelPhrase,
 } from "../../utils/spatialDistance";
 import {
+  beginMiniMapTouchTap,
+  cancelMiniMapTouchTap,
+  completeMiniMapTouchTap,
   computeBoundaryMarkerTicks,
+  createMiniMapTouchGestureState,
   doesEdgeCrossContainer,
   ENVELOPE_ARM_RADIUS,
   ENVELOPE_BORDER_WIDTH,
@@ -38,7 +42,11 @@ import {
   MINI_MAP_RX,
   MINI_MAP_RY,
   MINI_MAP_WIDTH,
+  type MiniMapOpenIntent,
+  type MiniMapTouchGestureState,
+  moveMiniMapTouchTap,
   resolveExternalContainerLabel,
+  shouldSuppressSyntheticDblClick,
 } from "./miniMapGeometry";
 
 const HALO_TEXT_STYLE: React.CSSProperties = {
@@ -79,7 +87,7 @@ export interface InspectorLocationCardProps {
     targetLocId: string,
     options?: LocationOverrideOptions
   ) => Promise<void>;
-  handleOpenFullMap: () => void;
+  handleOpenFullMap: (intent?: MiniMapOpenIntent) => void;
   onOpenWorldSheet?: () => void;
   panelId?: string;
   mode?: RightPanelMode;
@@ -115,6 +123,69 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
   const maskUid = useId().replace(/:/g, "");
   const fillMaskId = `minimap-env-fill-${maskUid}`;
   const borderMaskId = `minimap-env-border-${maskUid}`;
+  const touchGestureRef = useRef<MiniMapTouchGestureState>(
+    createMiniMapTouchGestureState()
+  );
+
+  const handleElementDoubleClick = (
+    e: React.MouseEvent,
+    intent: MiniMapOpenIntent
+  ) => {
+    e.stopPropagation();
+    if (shouldSuppressSyntheticDblClick(touchGestureRef.current, Date.now())) {
+      return;
+    }
+    handleOpenFullMap(intent);
+  };
+
+  const makeTouchHandlers = (
+    targetKey: string,
+    intent: MiniMapOpenIntent,
+    stopPropagation: boolean
+  ) => ({
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      if (stopPropagation) e.stopPropagation();
+      touchGestureRef.current = beginMiniMapTouchTap(touchGestureRef.current, {
+        pointerId: e.pointerId,
+        targetKey,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      if (stopPropagation) e.stopPropagation();
+      touchGestureRef.current = moveMiniMapTouchTap(touchGestureRef.current, {
+        pointerId: e.pointerId,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+    },
+    onPointerUp: (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      if (stopPropagation) e.stopPropagation();
+      const result = completeMiniMapTouchTap(touchGestureRef.current, {
+        pointerId: e.pointerId,
+        targetKey,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        now: Date.now(),
+      });
+      touchGestureRef.current = result.state;
+      if (result.triggered) {
+        handleOpenFullMap(intent);
+      }
+    },
+    onPointerCancel: (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      if (stopPropagation) e.stopPropagation();
+      touchGestureRef.current = cancelMiniMapTouchTap(
+        touchGestureRef.current,
+        e.pointerId
+      );
+    },
+  });
 
   const activeCont = activeLoc.container_id
     ? containerMap.get(activeLoc.container_id) ?? null
@@ -195,7 +266,7 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
             <button
               type="button"
               className="btn inspector-map-action-btn"
-              onClick={handleOpenFullMap}
+              onClick={() => handleOpenFullMap({ kind: "active" })}
               title={`Expand full zoomable world map (${bundle.visible_locations.length} locations)`}
               aria-label={`Expand Map (${bundle.visible_locations.length})`}
             >
@@ -222,6 +293,9 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
           width="100%"
           height={MINI_MAP_HEIGHT}
           viewBox={`0 0 ${MINI_MAP_WIDTH} ${MINI_MAP_HEIGHT}`}
+          className="inspector-minimap-svg"
+          onDoubleClick={(e) => handleElementDoubleClick(e, { kind: "empty" })}
+          {...makeTouchHandlers("empty", { kind: "empty" }, false)}
           style={{
             display: "block",
             width: "100%",
@@ -233,6 +307,7 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
             marginBottom: 10,
           }}
         >
+          <title>Double-click to expand full map</title>
           {activeCont && (
             <defs>
               <mask
@@ -397,8 +472,23 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
             const pillText = `L${activeCont.depth} · ${shortContName}`;
             const pillWidth = Math.min(130, Math.max(58, Math.round(22 + pillText.length * 4.3)));
             return (
-              <g pointerEvents="none">
-                <title>{`L${activeCont.depth} · ${activeCont.name}`}</title>
+              <g
+                pointerEvents="auto"
+                className="minimap-container-pill"
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) =>
+                  handleElementDoubleClick(e, {
+                    kind: "container",
+                    id: activeCont.id,
+                  })
+                }
+                {...makeTouchHandlers(
+                  "container",
+                  { kind: "container", id: activeCont.id },
+                  true
+                )}
+              >
+                <title>{`L${activeCont.depth} · ${activeCont.name} — Double-click to inspect container on full map`}</title>
                 <rect
                   x={6}
                   y={6}
@@ -504,7 +594,19 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                     opacity: isUnvisited && !isSelected ? 0.78 : 1,
                   }}
                   onClick={() => setSelectedLocId(loc.id)}
+                  onDoubleClick={(e) =>
+                    handleElementDoubleClick(e, {
+                      kind: "location",
+                      id: loc.id,
+                    })
+                  }
+                  {...makeTouchHandlers(
+                    `location:${loc.id}`,
+                    { kind: "location", id: loc.id },
+                    true
+                  )}
                 >
+                  <title>{`${loc.name} — Click to preview, double-click to inspect on full map`}</title>
                   <circle
                     cx={pt.x}
                     cy={pt.y}
@@ -705,31 +807,47 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                 </span>
               )}
             </div>
-            {selectedLocation.id === activeLoc.id ? (
-              <span
-                className="badge"
-                style={{
-                  fontSize: "0.64rem",
-                  padding: "1px 6px",
-                  borderColor: "rgba(245, 158, 11, 0.4)",
-                  color: "var(--accent-amber)",
-                }}
+            <div className="inspector-preview-actions">
+              {selectedLocation.id === activeLoc.id ? (
+                <span
+                  className="badge"
+                  style={{
+                    fontSize: "0.64rem",
+                    padding: "1px 6px",
+                    borderColor: "rgba(245, 158, 11, 0.4)",
+                    color: "var(--accent-amber)",
+                  }}
+                >
+                  Current
+                </span>
+              ) : (
+                onOverrideLocation && (
+                  <LocationOverrideButton
+                    targetLocationId={selectedLocation.id}
+                    targetLocationName={selectedLocation.name}
+                    coLocatedPartyNpcs={coLocatedPartyNpcs}
+                    disabled={isOverriding}
+                    isPending={isOverriding}
+                    compact
+                    onOverride={handleOverrideClick}
+                  />
+                )
+              )}
+              <button
+                type="button"
+                className="btn btn-ghost inspector-preview-focus-btn"
+                onClick={() =>
+                  handleOpenFullMap({
+                    kind: "location",
+                    id: selectedLocation.id,
+                  })
+                }
+                title={`Inspect ${selectedLocation.name} on full map`}
+                aria-label={`Inspect ${selectedLocation.name} on full map`}
               >
-                Current
-              </span>
-            ) : (
-              onOverrideLocation && (
-                <LocationOverrideButton
-                  targetLocationId={selectedLocation.id}
-                  targetLocationName={selectedLocation.name}
-                  coLocatedPartyNpcs={coLocatedPartyNpcs}
-                  disabled={isOverriding}
-                  isPending={isOverriding}
-                  compact
-                  onOverride={handleOverrideClick}
-                />
-              )
-            )}
+                <Maximize2 size={11} />
+              </button>
+            </div>
           </div>
           <div
             style={{

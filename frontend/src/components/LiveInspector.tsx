@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   MapPin,
@@ -39,6 +39,8 @@ import {
   MINI_MAP_CENTER,
   MINI_MAP_RX,
   MINI_MAP_RY,
+  type MiniMapOpenIntent,
+  resolveFullMapModalProps,
 } from "./inspector/miniMapGeometry";
 import { PhysicalStateControl } from "./shared/PhysicalStateControl";
 import { buildCampaignCharacterEntries } from "./world/codexHelpers";
@@ -135,14 +137,23 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   const activeLoc = bundle.active_location;
   const [selectedLocId, setSelectedLocId] = useState<string>(activeLoc.id);
   const [showFullMap, setShowFullMap] = useState(false);
+  const [fullMapOpenIntent, setFullMapOpenIntent] =
+    useState<MiniMapOpenIntent | null>(null);
+  const fullMapFocusNonceRef = useRef(0);
+  const [fullMapFocusNonce, setFullMapFocusNonce] = useState(0);
   const [isOverriding, setIsOverriding] = useState(false);
   const [showExits, setShowExits] = usePersistentState<boolean>("map.exits", false);
+
+  const closeFullMap = () => {
+    setShowFullMap(false);
+    setFullMapOpenIntent(null);
+  };
 
   useOverlayBackHandler({
     id: "fullscreen-map-modal",
     isOpen: showFullMap,
     priority: 5,
-    onClose: () => setShowFullMap(false),
+    onClose: closeFullMap,
   });
 
   // Latest vs previous turn on the active branch, used for "changed this turn" indicators
@@ -284,8 +295,19 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     }
   };
 
-  const handleOpenFullMap = () => {
-    setSelectedLocId(activeLoc.id);
+  const handleOpenFullMap = (
+    intent: MiniMapOpenIntent = { kind: "active" }
+  ) => {
+    if (intent.kind === "active") {
+      setSelectedLocId(activeLoc.id);
+    } else if (intent.kind === "location") {
+      setSelectedLocId(intent.id);
+    }
+    if (intent.kind === "location" || intent.kind === "container") {
+      fullMapFocusNonceRef.current += 1;
+      setFullMapFocusNonce(fullMapFocusNonceRef.current);
+    }
+    setFullMapOpenIntent(intent);
     setShowFullMap(true);
   };
 
@@ -386,10 +408,15 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
 
       {/* Full Zoomable Map Modal (portaled to document.body to escape .inspector--overlay stacking context) */}
       {showFullMap && (() => {
+        const fullMapModalProps = resolveFullMapModalProps(
+          fullMapOpenIntent,
+          activeLoc.id,
+          fullMapFocusNonce
+        );
         const fullMapModal = (
           <div
             className="modal-backdrop map-fullscreen-modal-backdrop"
-            onClick={() => setShowFullMap(false)}
+            onClick={closeFullMap}
           >
             <div
               className="modal-panel map-fullscreen-modal-panel"
@@ -401,7 +428,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                 locations={bundle.visible_locations}
                 edges={activeEdges}
                 activeLocationId={activeLoc.id}
-                defaultSelectedLocationId={selectedLocId}
+                defaultSelectedLocationId={fullMapModalProps.defaultSelectedLocationId}
+                externalFocusRequest={fullMapModalProps.externalFocusRequest}
                 presentCharacterLocations={presentCharacterLocations}
                 mode="campaign"
                 worldContext={{
@@ -412,7 +440,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                   settingOverview: world.global_rules.setting_overview,
                 }}
                 onSaveMap={onSaveCampaignMap}
-                onClose={() => setShowFullMap(false)}
+                onClose={closeFullMap}
                 onOverrideLocation={handleOverrideClick}
                 coLocatedPartyNpcs={coLocatedPartyNpcs}
                 isOverriding={isOverriding}
@@ -428,7 +456,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                 onOpenMechanicsHelp={
                   onOpenMechanicsHelp
                     ? (topicId) => {
-                        setShowFullMap(false);
+                        closeFullMap();
                         onOpenMechanicsHelp(topicId);
                       }
                     : undefined
