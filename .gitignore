@@ -56,3 +56,6 @@ todo*.md
 
 # Test-related stuff
 .tests/
+
+# Parallel Agent Worktrees
+.worktrees/
