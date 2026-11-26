@@ -37,6 +37,7 @@ test.describe("04 - Composer Slash Command Autocomplete, Inline Pills & @Mention
       "/look",
       "/narrate",
       "/party",
+      "/search",
       "/wait",
     ]);
 
