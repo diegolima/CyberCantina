@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Globe, Sparkles, X } from "lucide-react";
 import { api } from "../../api";
+import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import { WorldRecord, WorldWizardDraft } from "../../types";
 import {
   WorldInspectorModal,
@@ -37,6 +38,30 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
     () => (draft ? draftToWorldRecord(draft) : null),
     [draft]
   );
+
+  const isSeedDirty = Boolean(
+    loading ||
+      name !== "Orbital Station Helios-7" ||
+      genreAndTone !== "Hard Sci-Fi Corporate Thriller / Claustrophobic Noir" ||
+      corePremise !==
+        "A quarantined deep-space mining spindle where oxygen is rationed and a rogue AI whispers through the comms." ||
+      hubConcept !== "The Low-G Hydroponics Cantina ('The Oxygen Garden')" ||
+      locationCount !== 4
+  );
+
+  useOverlayBackHandler({
+    id: "world-wizard-seed",
+    isOpen: !draftWorld,
+    isDirty: isSeedDirty,
+    onClose,
+    guard: {
+      title: "Discard world wizard progress?",
+      message:
+        "You have modified world seed settings or an in-progress generation. Discard progress and close?",
+      confirmLabel: "Discard",
+      cancelLabel: "Stay",
+    },
+  });
 
   const handleGenerateDraft = async (e: React.FormEvent) => {
     e.preventDefault();

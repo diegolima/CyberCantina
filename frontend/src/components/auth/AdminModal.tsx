@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, api } from "../../api";
+import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import { PromptPresetsManager } from "../PromptPresetsManager";
 import { AppSettings, UserProfile } from "../../types";
 import { FeedbackModal } from "./FeedbackModal";
@@ -79,6 +80,17 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
     affectedUsers: number;
     message: string;
   } | null>(null);
+
+  useOverlayBackHandler({
+    id: "admin-purge-confirm",
+    isOpen: Boolean(pendingPurgeConfirm),
+    priority: 15,
+    onClose: () => {
+      if (!savingSettings) {
+        setPendingPurgeConfirm(null);
+      }
+    },
+  });
 
   const loadSettings = async () => {
     try {

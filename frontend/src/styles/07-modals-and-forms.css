@@ -619,3 +619,50 @@
 .behavior-toggle-label input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
+
+/* Browser Navigation & Unsaved Guard Modal */
+.nav-guard-backdrop {
+  z-index: 1300;
+}
+
+.nav-guard-panel {
+  width: min(440px, 92vw);
+}
+
+.nav-guard-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-amber);
+}
+
+.nav-guard-body {
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.nav-guard-body p {
+  margin: 0;
+}
+
+.nav-guard-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-deep);
+}
+
+.nav-guard-confirm-btn {
+  background: var(--rose-bg);
+  border-color: var(--rose-border);
+  color: var(--rose-fg);
+}
+
+.nav-guard-confirm-btn:hover {
+  background: var(--rose-bg-hover);
+  border-color: var(--accent-rose);
+  color: var(--text-primary);
+}

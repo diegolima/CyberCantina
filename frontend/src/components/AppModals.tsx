@@ -1,5 +1,6 @@
 import React from "react";
 import { api } from "../api";
+import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import { AdminModal, ProfileModal } from "./AuthModals";
 import { DeleteConfirmationModal, type DeleteTarget } from "./DeleteConfirmationModal";
 import {
@@ -25,7 +26,6 @@ import {
 } from "../types";
 
 export interface AppModalsProps {
-  ACTIVE_CAMPAIGN_STORAGE_KEY: string;
   DEFAULT_PERSONA_STORAGE_KEY: string;
   currentUser: UserProfile;
   setCurrentUser: React.Dispatch<React.SetStateAction<UserProfile | null>>;
@@ -39,7 +39,6 @@ export interface AppModalsProps {
   setCampaigns: React.Dispatch<React.SetStateAction<CampaignRecord[]>>;
   notes: UserNote[];
   bundle: CampaignStateBundle | null;
-  setBundle: React.Dispatch<React.SetStateAction<CampaignStateBundle | null>>;
   activeWorld: WorldRecord | null;
   setActiveWorld: React.Dispatch<React.SetStateAction<WorldRecord | null>>;
   activeCharacter: CharacterRecord | null;
@@ -114,13 +113,18 @@ export interface AppModalsProps {
   handleDeleteNote: (noteId: string) => Promise<void>;
   handleToggleNoteStar: (note: UserNote) => Promise<void>;
   handleSetDefaultPersona: (persona: PersonaRecord) => void;
+  onLaunchCampaign: (
+    createdBundle: CampaignStateBundle,
+    world: WorldRecord,
+    character: CharacterRecord,
+    persona?: PersonaRecord | null
+  ) => void;
   handleAccountDeleted: () => Promise<void>;
   refreshAuthStatus: () => Promise<unknown>;
   loadWorkspaceData: () => Promise<void>;
 }
 
 export const AppModals: React.FC<AppModalsProps> = ({
-  ACTIVE_CAMPAIGN_STORAGE_KEY,
   DEFAULT_PERSONA_STORAGE_KEY,
   currentUser,
   setCurrentUser,
@@ -134,7 +138,6 @@ export const AppModals: React.FC<AppModalsProps> = ({
   setCampaigns,
   notes,
   bundle,
-  setBundle,
   activeWorld,
   setActiveWorld,
   activeCharacter,
@@ -193,10 +196,47 @@ export const AppModals: React.FC<AppModalsProps> = ({
   handleDeleteNote,
   handleToggleNoteStar,
   handleSetDefaultPersona,
+  onLaunchCampaign,
   handleAccountDeleted,
   refreshAuthStatus,
   loadWorkspaceData,
 }) => {
+  useOverlayBackHandler({
+    id: "delete-confirmation-modal",
+    isOpen: Boolean(deleteTarget),
+    priority: 20,
+    onClose: () => {
+      if (!isDeleting) {
+        setDeleteTarget(null);
+      }
+    },
+  });
+
+  useOverlayBackHandler({
+    id: "profile-modal",
+    isOpen: Boolean(showProfileModal && currentUser),
+    onClose: () => {
+      setShowProfileModal(false);
+      setProfileInitialSubTab(undefined);
+      void api.getProfileModels().then(setProfileModels).catch(() => {});
+    },
+  });
+
+  useOverlayBackHandler({
+    id: "admin-modal",
+    isOpen: Boolean(showAdminModal && currentUser && currentUser.role === "admin"),
+    onClose: () => {
+      setShowAdminModal(false);
+      void api.getProfileModels().then(setProfileModels).catch(() => {});
+    },
+  });
+
+  useOverlayBackHandler({
+    id: "new-campaign-modal",
+    isOpen: showNewCampaignModal,
+    onClose: () => setShowNewCampaignModal(false),
+  });
+
   return (
     <>
       <DeleteConfirmationModal
@@ -249,13 +289,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
                 });
                 const allCamps = await api.listCampaigns();
                 setCampaigns(allCamps);
-                setBundle(newBundle);
-                try {
-                  localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, newBundle.campaign.id);
-                } catch {}
-                setCampaignWorld(targetWorld);
-                setCampaignCharacter(createdChar);
-                setActiveWorld(targetWorld);
+                onLaunchCampaign(newBundle, targetWorld, createdChar);
               }
             }
           }}
@@ -466,21 +500,14 @@ export const AppModals: React.FC<AppModalsProps> = ({
             const created = await api.createCampaign(payload);
             const allCamps = await api.listCampaigns();
             setCampaigns(allCamps);
-            setBundle(created);
-            try {
-              localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, created.campaign.id);
-            } catch {}
             const w = worlds.find((item) => item.id === payload.world_id) ?? worlds[0];
             const primaryId = payload.focus_character_id || payload.character_id || payload.character_ids?.[0];
             const c = characters.find((item) => item.id === primaryId) ?? characters[0];
-            setCampaignWorld(w);
-            setCampaignCharacter(c);
-            setActiveWorld(w);
-            setActiveCharacter(c);
-            if (payload.persona_id) {
-              const p = personas.find((item) => item.id === payload.persona_id) ?? null;
-              setActivePersona(p);
-            }
+            const p = payload.persona_id
+              ? personas.find((item) => item.id === payload.persona_id) ?? null
+              : null;
+            setShowNewCampaignModal(false);
+            onLaunchCampaign(created, w, c, p);
           }}
         />
       )}

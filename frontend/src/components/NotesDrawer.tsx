@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { UserNote } from "../types";
+import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import { rankNotes, slugifyTag } from "../utils/noteSearch";
 
 interface NotesFlyoutProps {
@@ -410,6 +411,44 @@ export const NotesModal: React.FC<NotesModalProps> = ({
   const [copiedSuccess, setCopiedSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const isDirty = useMemo(() => {
+    if (!isOpen) return false;
+    if (isCreatingNew) {
+      return Boolean(formTitle.trim() || formContent.trim());
+    }
+    const current = notes.find((n) => n.id === selectedNoteId);
+    if (!current) return false;
+    return (
+      formTitle !== current.title ||
+      formContent !== current.content ||
+      formStarred !== current.is_starred ||
+      JSON.stringify(formTags) !== JSON.stringify(current.tags)
+    );
+  }, [
+    isOpen,
+    isCreatingNew,
+    formTitle,
+    formContent,
+    formStarred,
+    formTags,
+    notes,
+    selectedNoteId,
+  ]);
+
+  useOverlayBackHandler({
+    id: "notes-modal",
+    isOpen,
+    isDirty,
+    onClose,
+    guard: {
+      title: "Discard unsaved note changes?",
+      message:
+        "You have unsaved edits in your scratchpad note. Discard them and close?",
+      confirmLabel: "Discard",
+      cancelLabel: "Stay",
+    },
+  });
 
   // Synchronize selection
   useEffect(() => {

@@ -16,6 +16,7 @@ import {
   RecalledMemoryItem,
   WorldRecord,
 } from "../../types";
+import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import { isSecretLoreRevealed } from "../world/codexHelpers";
 
 type IndexFilter =
@@ -458,6 +459,13 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
   revealedLoreIds = [],
   onClose,
 }) => {
+  useOverlayBackHandler({
+    id: "lore-index-modal",
+    isOpen: true,
+    priority: 10,
+    onClose,
+  });
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();

@@ -25,6 +25,7 @@ import {
   TurnNodeRecord,
 } from "../types";
 import { api } from "../api";
+import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import { ContextHealthPill } from "./chat/ContextHealthPill";
 import { ContextHealthModal } from "./chat/ContextHealthModal";
 import { getActiveTurnForTelemetry } from "./chat/contextHealthHelpers";
@@ -173,6 +174,30 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     isCampaignStreaming: isBusy,
     textareaRef,
     onCampaignBundleChange,
+  });
+
+  useOverlayBackHandler({
+    id: "gm-talk-drawer",
+    isOpen: gmTalk.isOpen,
+    priority: 1,
+    onClose: gmTalk.minimize,
+  });
+
+  useOverlayBackHandler({
+    id: "agent-changes-modal",
+    isOpen: Boolean(activeAgentModal),
+    priority: 5,
+    onClose: () => setActiveAgentModal(null),
+  });
+
+  useOverlayBackHandler({
+    id: "context-health-modal",
+    isOpen: isContextHealthOpen,
+    priority: 5,
+    onClose: () => {
+      setIsContextHealthOpen(false);
+      setInspectedTelemetryTurnId(null);
+    },
   });
 
   // Clicking outside the GM slide-out and reused composer minimizes GM Talk

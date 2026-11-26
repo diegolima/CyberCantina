@@ -38,6 +38,7 @@ flowchart TD
     b_0 --> b_1
     b_0 --> b_2
     b_0 --> b_9
+    b_0 --> b_12
     b_0 --> b_13
     b_0 --> b_15
     b_0 --> b_16
@@ -64,11 +65,13 @@ flowchart TD
     b_3 --> b_8
     b_3 --> b_11
     b_3 --> b_12
+    b_3 --> b_16
     b_3 --> b_20
     b_3 --> b_21
     b_4 --> b_1
     b_4 --> b_2
     b_4 --> b_12
+    b_4 --> b_16
     b_4 --> b_20
     b_4 --> b_21
     b_5 --> b_2
@@ -80,6 +83,7 @@ flowchart TD
     b_5 --> b_21
     b_6 --> b_7
     b_6 --> b_15
+    b_6 --> b_16
     b_6 --> b_20
     b_6 --> b_21
     b_7 --> b_2
@@ -98,6 +102,7 @@ flowchart TD
     b_11 --> b_17
     b_11 --> b_19
     b_11 --> b_20
+    b_12 --> b_16
     b_12 --> b_20
     b_12 --> b_21
     b_13 --> b_2
@@ -105,6 +110,7 @@ flowchart TD
     b_13 --> b_20
     b_14 --> b_1
     b_14 --> b_2
+    b_14 --> b_16
     b_14 --> b_20
     b_15 --> b_1
     b_15 --> b_2
@@ -112,9 +118,11 @@ flowchart TD
     b_15 --> b_5
     b_15 --> b_7
     b_15 --> b_12
+    b_15 --> b_16
     b_15 --> b_20
     b_15 --> b_21
     b_16 --> b_1
+    b_16 --> b_19
     b_16 --> b_20
     b_16 --> b_21
     b_17 --> b_20
@@ -122,6 +130,7 @@ flowchart TD
     b_19 --> b_1
     b_19 --> b_17
     b_19 --> b_20
+    b_19 --> b_21
     b_21 --> b_20
 ```
 
@@ -129,25 +138,25 @@ flowchart TD
 
 | Bucket | Files | Outgoing Dependencies |
 | :--- | ---: | :--- |
-| `App` | 1 | `api`, `components (root)`, `components/party`, `components/story`, `components/world`, `hooks`, `providers`, `types`, `utils` |
+| `App` | 1 | `api`, `components (root)`, `components/party`, `components/shared`, `components/story`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `api` | 15 | `types` |
 | `components (root)` | 25 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
-| `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
-| `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
+| `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `hooks`, `types`, `utils` |
+| `components/character` | 12 | `api`, `components (root)`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/chat` | 23 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
-| `components/inspector` | 7 | `components/map`, `components/world`, `types`, `utils` |
+| `components/inspector` | 7 | `components/map`, `components/world`, `hooks`, `types`, `utils` |
 | `components/map` | 17 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
 | `components/party` | 1 | `components/shared`, `types`, `utils` |
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
-| `components/shared` | 7 | `types`, `utils` |
+| `components/shared` | 8 | `hooks`, `types`, `utils` |
 | `components/story` | 5 | `components (root)`, `components/shared`, `types` |
-| `components/wizard` | 2 | `api`, `components (root)`, `types` |
-| `components/world` | 17 | `api`, `components (root)`, `components/character`, `components/chat`, `components/map`, `components/shared`, `types`, `utils` |
-| `hooks` | 5 | `api`, `types`, `utils` |
+| `components/wizard` | 2 | `api`, `components (root)`, `hooks`, `types` |
+| `components/world` | 17 | `api`, `components (root)`, `components/character`, `components/chat`, `components/map`, `components/shared`, `hooks`, `types`, `utils` |
+| `hooks` | 6 | `api`, `providers`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
-| `providers` | 1 | `api`, `local`, `types` |
-| `types` | 17 | *(leaf)* |
-| `utils` | 17 | `types` |
+| `providers` | 2 | `api`, `local`, `types`, `utils` |
+| `types` | 18 | *(leaf)* |
+| `utils` | 18 | `types` |

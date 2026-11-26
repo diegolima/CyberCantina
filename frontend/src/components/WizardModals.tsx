@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import {
   CharacterRecord,
   CharacterWizardDraft,
@@ -86,6 +87,31 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [mediaWarning, setMediaWarning] = useState<string | null>(initialMediaWarning);
+
+  const isWizardDirty = Boolean(
+    draft ||
+      loading ||
+      name !== "Soren Kael" ||
+      archetype !== "Rogue corporate courier with an encrypted memory vault" ||
+      roleInStory !== "High-stakes informant seeking safe passage" ||
+      roughNotes !== "Fled an ambush in the upper spire; carries a locked bio-drive." ||
+      JSON.stringify(personalityKeywords) !==
+        JSON.stringify(["paranoid", "razor-sharp", "dryly funny", "loyal"])
+  );
+
+  useOverlayBackHandler({
+    id: "character-wizard",
+    isOpen: true,
+    isDirty: isWizardDirty,
+    onClose,
+    guard: {
+      title: "Discard character wizard progress?",
+      message:
+        "You have an active character draft or modified seed details. Discard progress and close?",
+      confirmLabel: "Discard",
+      cancelLabel: "Stay",
+    },
+  });
 
   const handleManualCreate = () => {
     const kwList = personalityKeywords.filter(Boolean);

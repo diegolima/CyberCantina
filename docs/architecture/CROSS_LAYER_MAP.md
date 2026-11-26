@@ -870,6 +870,7 @@ erDiagram
 | `frontend/src/components/shared/ClickToEditField.tsx` |
 | `frontend/src/components/shared/ImageLightboxModal.tsx` |
 | `frontend/src/components/shared/MechanicsHelpButton.tsx` |
+| `frontend/src/components/shared/NavigationGuardModal.tsx` |
 | `frontend/src/components/shared/PhysicalStateControl.tsx` |
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 | `frontend/src/components/shared/VideoUploadControls.tsx` |
@@ -921,6 +922,7 @@ erDiagram
 | `frontend/src/hooks/useDrawerSwipeDismiss.ts` |
 | `frontend/src/hooks/useGmTalk.ts` |
 | `frontend/src/hooks/useMagicWand.ts` |
+| `frontend/src/hooks/useOverlayBackHandler.ts` |
 | `frontend/src/hooks/useResponsiveCampaignLayout.ts` |
 
 #### `local`
@@ -946,6 +948,7 @@ erDiagram
 | File |
 | :--- |
 | `frontend/src/providers/LocalRelayContext.tsx` |
+| `frontend/src/providers/NavigationHistoryContext.tsx` |
 
 #### `types`
 
@@ -959,6 +962,7 @@ erDiagram
 | `frontend/src/types/importExport.ts` |
 | `frontend/src/types/index.ts` |
 | `frontend/src/types/mechanics.ts` |
+| `frontend/src/types/navigation.ts` |
 | `frontend/src/types/notes.ts` |
 | `frontend/src/types/party.ts` |
 | `frontend/src/types/persona.ts` |
@@ -983,6 +987,7 @@ erDiagram
 | `frontend/src/utils/importExportLogic.ts` |
 | `frontend/src/utils/mentions.ts` |
 | `frontend/src/utils/narratorCognition.ts` |
+| `frontend/src/utils/navigationHistory.ts` |
 | `frontend/src/utils/noteSearch.ts` |
 | `frontend/src/utils/partyCommand.ts` |
 | `frontend/src/utils/partyHelpers.ts` |

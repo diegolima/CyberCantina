@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import {
   AppSettings,
   GalleryImage,
@@ -116,6 +117,83 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const currentSnapshot = useMemo(
+    () =>
+      JSON.stringify({
+        name,
+        tagline,
+        species,
+        age,
+        ageIsSecret,
+        sex,
+        pronouns,
+        personaBio,
+        tags,
+        buildAndHeight,
+        portraitUrl,
+        gallery,
+        distinctiveFeatures,
+        loreEntries,
+        equipped,
+        inventory,
+        stagedUnsupportedDeletes: Array.from(stagedUnsupportedDeletes).sort(),
+      }),
+    [
+      name,
+      tagline,
+      species,
+      age,
+      ageIsSecret,
+      sex,
+      pronouns,
+      personaBio,
+      tags,
+      buildAndHeight,
+      portraitUrl,
+      gallery,
+      distinctiveFeatures,
+      loreEntries,
+      equipped,
+      inventory,
+      stagedUnsupportedDeletes,
+    ]
+  );
+
+  const baselineSnapshotRef = useRef<string | null>(null);
+  const lastPersonaIdRef = useRef<string | null | undefined>(persona?.id ?? null);
+  if (
+    baselineSnapshotRef.current === null ||
+    lastPersonaIdRef.current !== (persona?.id ?? null)
+  ) {
+    baselineSnapshotRef.current = currentSnapshot;
+    lastPersonaIdRef.current = persona?.id ?? null;
+  }
+
+  useEffect(() => {
+    // Reset dirty baseline when switching persona record.
+    baselineSnapshotRef.current = currentSnapshot;
+    lastPersonaIdRef.current = persona?.id ?? null;
+  }, [persona?.id]);
+
+  const isDirty =
+    !isReadOnly &&
+    (clonedMode || currentSnapshot !== baselineSnapshotRef.current);
+
+  useOverlayBackHandler({
+    id: "persona-editor",
+    isOpen: true,
+    priority: 5,
+    isDirty,
+    onClose,
+    guard: {
+      title: "Discard unsaved persona changes?",
+      message:
+        "You have unsaved edits to this persona. Discard them and return?",
+      confirmLabel: "Discard",
+      cancelLabel: "Stay",
+    },
+  });
 
   // Shortcut pills for quick demographic & height selection
   const speciesShortcuts = ["Human", "Cyborg", "Android", "Replicant", "Elf", "Synth"];

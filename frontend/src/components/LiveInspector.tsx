@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import type { RightPanelMode } from "../utils/campaignLayout";
 import { useDrawerSwipeDismiss } from "../hooks/useDrawerSwipeDismiss";
+import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import {
   CampaignStateBundle,
   CharacterRecord,
@@ -136,6 +137,13 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   const [showFullMap, setShowFullMap] = useState(false);
   const [isOverriding, setIsOverriding] = useState(false);
   const [showExits, setShowExits] = usePersistentState<boolean>("map.exits", false);
+
+  useOverlayBackHandler({
+    id: "fullscreen-map-modal",
+    isOpen: showFullMap,
+    priority: 5,
+    onClose: () => setShowFullMap(false),
+  });
 
   // Latest vs previous turn on the active branch, used for "changed this turn" indicators
   const turns = bundle.active_branch_turns;

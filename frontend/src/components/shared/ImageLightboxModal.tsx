@@ -8,6 +8,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
+import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 
 export interface ImageLightboxModalProps {
   url: string;
@@ -45,6 +46,13 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
   onImageError,
   onClose,
 }) => {
+  useOverlayBackHandler({
+    id: "image-lightbox-modal",
+    isOpen: true,
+    priority: 15,
+    onClose,
+  });
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [phase, setPhase] = useState<LightboxVideoPhase>(
     videoUrl && autoPlayVideo ? "waiting" : "idle"

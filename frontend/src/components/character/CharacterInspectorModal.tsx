@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../api";
+import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import {
   CharacterBaseTab,
   CharacterAppearanceTab,
@@ -157,6 +158,20 @@ export const CharacterInspectorModal: React.FC<
   const [saving, setSaving] = useState(false);
   const [exportingChar, setExportingChar] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useOverlayBackHandler({
+    id: "character-inspector",
+    isOpen: true,
+    isDirty: isDirty && !viewingHistory,
+    onClose,
+    guard: {
+      title: "Discard unsaved character changes?",
+      message:
+        "You have unsaved edits to this character. Discard them and return?",
+      confirmLabel: "Discard",
+      cancelLabel: "Stay",
+    },
+  });
 
   useEffect(() => {
     setLatestCharacter(character);

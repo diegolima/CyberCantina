@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { useOptionalLocalRelay } from "../providers/LocalRelayContext";
+import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import {
   CampaignRecord,
   CharacterRecord,
@@ -45,6 +46,8 @@ export interface HomeScreenProps {
   currentUser: UserProfile | null;
   singleUserMode: boolean;
   homeMessages?: PublicAdminMessage[];
+  routeNotice?: string | null;
+  onDismissRouteNotice?: () => void;
   notesCount?: number;
   onSelectCampaign: (campaign: CampaignRecord) => void;
   onInspectCharacter: (character: CharacterRecord) => void;
@@ -221,6 +224,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   currentUser,
   singleUserMode,
   homeMessages = [],
+  routeNotice = null,
+  onDismissRouteNotice,
   notesCount,
   onSelectCampaign,
   onInspectCharacter,
@@ -254,6 +259,27 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [preloadingWebGpu, setPreloadingWebGpu] = useState(false);
   const [preloadError, setPreloadError] = useState<string | null>(null);
+
+  useOverlayBackHandler({
+    id: "home-entity-picker",
+    isOpen: activePickerCategory !== null,
+    onClose: () => setActivePickerCategory(null),
+  });
+
+  useOverlayBackHandler({
+    id: "export-bundle-modal",
+    isOpen: showExportModal,
+    onClose: () => setShowExportModal(false),
+  });
+
+  useOverlayBackHandler({
+    id: "import-preview-modal",
+    isOpen: showImportModal,
+    onClose: () => {
+      setShowImportModal(false);
+      setDroppedFile(null);
+    },
+  });
 
   const dismissKey = currentUser
     ? `cantina_webgpu_notice_dismissed_v1:${currentUser.id}`
@@ -439,6 +465,25 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               userId={currentUser?.id}
               className="home-admin-msg-stack"
             />
+          )}
+
+          {routeNotice && (
+            <div className="home-route-notice" role="status">
+              <div className="home-route-notice-main">
+                <AlertTriangle size={16} color="var(--accent-amber)" />
+                <span>{routeNotice}</span>
+              </div>
+              {onDismissRouteNotice && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={onDismissRouteNotice}
+                  aria-label="Dismiss notice"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
           )}
 
           {showWebGpuNotice && (

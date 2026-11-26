@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../api";
+import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import {
   LOCATION_LORE_CATEGORIES,
   WORLD_LORE_CATEGORIES,
@@ -419,6 +420,59 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   );
   const [reimagining, setReimagining] = useState(false);
   const [reimagineError, setReimagineError] = useState<string | null>(null);
+
+  const effectiveIsDirty =
+    mode === "wizard"
+      ? true
+      : isCampaignMode
+      ? isDirty || campaignWorldLoreDirty
+      : isDirty;
+
+  useOverlayBackHandler({
+    id:
+      mode === "wizard"
+        ? "world-wizard-draft"
+        : isCampaignMode
+        ? "campaign-world-sheet"
+        : "world-inspector",
+    isOpen: true,
+    isDirty: effectiveIsDirty,
+    onClose,
+    guard: {
+      title:
+        mode === "wizard"
+          ? "Discard unsaved world draft?"
+          : "Discard unsaved world changes?",
+      message:
+        mode === "wizard"
+          ? "You have an unsaved world draft. Discard it and return?"
+          : "You have unsaved edits to this world. Discard them and close?",
+      confirmLabel: "Discard",
+      cancelLabel: "Stay",
+    },
+  });
+
+  useOverlayBackHandler({
+    id: "world-export-dialog",
+    isOpen: showExportDialog,
+    priority: 15,
+    onClose: () => {
+      if (!exportingWorld) {
+        setShowExportDialog(false);
+      }
+    },
+  });
+
+  useOverlayBackHandler({
+    id: "world-reimagine-modal",
+    isOpen: showReimagineModal,
+    priority: 15,
+    onClose: () => {
+      if (!reimagining) {
+        setShowReimagineModal(false);
+      }
+    },
+  });
 
   const handleExecuteReimagine = async () => {
     if (!reimagineDescription.trim()) return;

@@ -1,5 +1,6 @@
 import React from "react";
 import { AlertTriangle, Check } from "lucide-react";
+import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 
 export interface FeedbackModalProps {
   type: "success" | "error";
@@ -16,6 +17,13 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
   onConfirm,
   confirmLabel = "OK",
 }) => {
+  useOverlayBackHandler({
+    id: "feedback-modal",
+    isOpen: true,
+    priority: 20,
+    onClose: onConfirm,
+  });
+
   return (
     <div className="modal-backdrop" style={{ zIndex: 1200 }}>
       <div className="modal-panel" style={{ maxWidth: 460, padding: 0 }}>

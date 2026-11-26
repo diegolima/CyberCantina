@@ -726,7 +726,14 @@ export async function installCantinaApiMock(
   if (options.startInCampaign) {
     await page.addInitScript((campId: string) => {
       try {
-        window.localStorage.setItem("cybercantina_active_campaign_id", campId);
+        const key = "__cc_e2e_started_campaign";
+        if (
+          window.location.pathname === "/" &&
+          !window.sessionStorage.getItem(key)
+        ) {
+          window.sessionStorage.setItem(key, "1");
+          window.history.replaceState(null, "", `/campaigns/${campId}`);
+        }
       } catch {}
     }, "camp_1");
   }
@@ -1045,7 +1052,11 @@ export async function installCantinaApiMock(
     const campStateMatch = pathname.match(/^\/api\/campaigns\/([^/]+)\/state$/);
     if (campStateMatch && method === "GET") {
       const campId = decodeURIComponent(campStateMatch[1]);
-      return fulfillJson(route, state.bundles[campId] ?? state.bundles["camp_1"]);
+      const found = state.bundles[campId];
+      if (!found) {
+        return fulfillJson(route, { detail: "Campaign not found" }, 404);
+      }
+      return fulfillJson(route, found);
     }
 
     const campPersonaMatch = pathname.match(/^\/api\/campaigns\/([^/]+)\/persona-state$/);

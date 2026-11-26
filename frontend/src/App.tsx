@@ -26,13 +26,20 @@ import { ExportCampaignModal } from "./components/ExportCampaignModal";
 import { countVisibleTimelines } from "./components/story/branchGraphLayout";
 import { buildCampaignCharacterEntries } from "./components/world/codexHelpers";
 import { LocalRelayProvider } from "./providers/LocalRelayContext";
+import {
+  NavigationHistoryProvider,
+  useNavigationHistory,
+} from "./providers/NavigationHistoryContext";
+import { NavigationGuardModal } from "./components/shared/NavigationGuardModal";
 import { useCampaignTurnActions } from "./hooks/useCampaignTurnActions";
+import { useOverlayBackHandler } from "./hooks/useOverlayBackHandler";
 import { useResponsiveCampaignLayout } from "./hooks/useResponsiveCampaignLayout";
 import { getShellClassNames } from "./utils/campaignLayout";
 import { slugifyTag } from "./utils/noteSearch";
 import { formatPartyActionTurnMessage } from "./utils/partyCommand";
 import { getActiveParties } from "./utils/partyHelpers";
 import {
+  AppRoute,
   AppSettings,
   AuthSessionResponse,
   CampaignRecord,
@@ -47,8 +54,12 @@ import {
   WorldRecord,
 } from "./types";
 
-export const App: React.FC = () => {
+const AppShell: React.FC = () => {
+  const nav = useNavigationHistory();
   const [authChecking, setAuthChecking] = useState(true);
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [routeNotice, setRouteNotice] = useState<string | null>(null);
+  const campaignLoadSeqRef = useRef(0);
   const [setupRequired, setSetupRequired] = useState(false);
   const [singleUserMode, setSingleUserMode] = useState(false);
   const [allowSelfRegistration, setAllowSelfRegistration] = useState(true);
@@ -234,7 +245,6 @@ export const App: React.FC = () => {
     setCampaignWorld,
   });
 
-  const ACTIVE_CAMPAIGN_STORAGE_KEY = "cybercantina_active_campaign_id";
   const DEFAULT_PERSONA_STORAGE_KEY = "cybercantina_default_persona_id";
 
   const handlePanelOpened = useCallback(() => {
@@ -246,6 +256,59 @@ export const App: React.FC = () => {
     hasTopPopoverOpen: showNotesFlyout,
     onPanelOpened: handlePanelOpened,
   });
+
+  // Register campaign-level ephemeral overlays & mobile/tablet drawers with browser Back stack.
+  useOverlayBackHandler({
+    id:
+      layout.activeOverlayDrawer === "left"
+        ? "drawer-sidebar"
+        : "drawer-inspector",
+    isOpen: Boolean(bundle && layout.activeOverlayDrawer !== "none"),
+    onClose: layout.closeOverlays,
+  });
+
+  useOverlayBackHandler({
+    id: "notes-flyout",
+    isOpen: showNotesFlyout,
+    priority: 2,
+    onClose: () => setShowNotesFlyout(false),
+  });
+
+  useOverlayBackHandler({
+    id: "story-modal",
+    isOpen: Boolean(bundle && storyModalTab !== null),
+    onClose: () => setStoryModalTab(null),
+  });
+
+  useOverlayBackHandler({
+    id: "party-modal",
+    isOpen: Boolean(bundle && campaignWorld && isPartyModalOpen),
+    onClose: () => setIsPartyModalOpen(false),
+  });
+
+  useOverlayBackHandler({
+    id: "export-campaign-modal",
+    isOpen: Boolean(exportingCampaign),
+    onClose: () => setExportingCampaign(null),
+  });
+
+  useEffect(() => {
+    nav.setRouteGuard(
+      bundle && isStreaming
+        ? {
+            isBlocked: true,
+            guard: {
+              title: "Leave active campaign?",
+              message:
+                "A turn is currently streaming. Leaving now will return to the Home screen and interrupt the live stream view.",
+              confirmLabel: "Leave Campaign",
+              cancelLabel: "Stay in Campaign",
+            },
+          }
+        : null
+    );
+    return () => nav.setRouteGuard(null);
+  }, [nav, bundle, isStreaming]);
 
   const handleOpenMechanicsGuide = useCallback(
     (topicId: MechanicsTopicId) => {
@@ -277,39 +340,95 @@ export const App: React.FC = () => {
     } catch {}
   };
 
-  const loadCampaignBundle = async (
-    campaignId: string,
-    catalogWorlds?: WorldRecord[],
-    catalogCharacters?: CharacterRecord[]
-  ) => {
+  const resetCampaignUiState = useCallback(() => {
     setPendingLocationOverrideId(null);
     setCampaignWorldSheetTab(null);
+    setCodexFocusRequest(null);
     setStoryModalTab(null);
     setScrollTargetTurn(null);
     setIsPartyModalOpen(false);
+    setExportingCampaign(null);
     layout.closeOverlays();
-    const stateBundle = await api.getCampaignState(campaignId);
-    setBundle(stateBundle);
-    try {
-      localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, campaignId);
-    } catch {}
-    const [w, c] = await Promise.all([
-      api.getWorld(stateBundle.campaign.world_id),
-      api.getCharacter(stateBundle.campaign.character_id),
-    ]);
-    setCampaignWorld(w);
-    setCampaignCharacter(c);
-    const liveWorlds = (catalogWorlds ?? worlds).filter((item) => !item.pending_deletion);
-    const liveChars = (catalogCharacters ?? characters).filter((item) => !item.pending_deletion);
-    const nextActiveWorld = !w.pending_deletion
-      ? w
-      : liveWorlds.find((item) => item.name === w.name) ?? liveWorlds[0] ?? null;
-    const nextActiveCharacter = !c.pending_deletion
-      ? c
-      : liveChars.find((item) => item.name === c.name) ?? liveChars[0] ?? null;
-    setActiveWorld(nextActiveWorld);
-    setActiveCharacter(nextActiveCharacter);
-  };
+  }, [layout.closeOverlays, setPendingLocationOverrideId]);
+
+  const loadCampaignBundle = useCallback(
+    async (
+      campaignId: string,
+      catalogWorlds?: WorldRecord[],
+      catalogCharacters?: CharacterRecord[]
+    ) => {
+      const seq = ++campaignLoadSeqRef.current;
+      resetCampaignUiState();
+      const stateBundle = await api.getCampaignState(campaignId);
+      if (seq !== campaignLoadSeqRef.current) return;
+      const [w, c] = await Promise.all([
+        api.getWorld(stateBundle.campaign.world_id),
+        api.getCharacter(stateBundle.campaign.character_id),
+      ]);
+      if (seq !== campaignLoadSeqRef.current) return;
+      setBundle(stateBundle);
+      setCampaignWorld(w);
+      setCampaignCharacter(c);
+      const liveWorlds = (catalogWorlds ?? worlds).filter(
+        (item) => !item.pending_deletion
+      );
+      const liveChars = (catalogCharacters ?? characters).filter(
+        (item) => !item.pending_deletion
+      );
+      const nextActiveWorld = !w.pending_deletion
+        ? w
+        : liveWorlds.find((item) => item.name === w.name) ?? liveWorlds[0] ?? null;
+      const nextActiveCharacter = !c.pending_deletion
+        ? c
+        : liveChars.find((item) => item.name === c.name) ?? liveChars[0] ?? null;
+      setActiveWorld(nextActiveWorld);
+      setActiveCharacter(nextActiveCharacter);
+    },
+    [characters, resetCampaignUiState, worlds]
+  );
+
+  const openCampaignById = useCallback(
+    async (
+      campaignId: string,
+      catalogWorlds?: WorldRecord[],
+      catalogCharacters?: CharacterRecord[]
+    ) => {
+      try {
+        await loadCampaignBundle(campaignId, catalogWorlds, catalogCharacters);
+        setRouteNotice(null);
+      } catch {
+        setBundle(null);
+        setCampaignWorld(null);
+        setCampaignCharacter(null);
+        setRouteNotice("That campaign could not be found or is no longer available.");
+        nav.replaceRoute({ kind: "home" });
+      }
+    },
+    [loadCampaignBundle, nav]
+  );
+
+  const launchCreatedCampaign = useCallback(
+    (
+      newBundle: CampaignStateBundle,
+      targetWorld: WorldRecord,
+      targetChar: CharacterRecord,
+      targetPersona?: PersonaRecord | null
+    ) => {
+      campaignLoadSeqRef.current += 1;
+      resetCampaignUiState();
+      setBundle(newBundle);
+      setCampaignWorld(targetWorld);
+      setCampaignCharacter(targetChar);
+      setActiveWorld(targetWorld);
+      setActiveCharacter(targetChar);
+      if (targetPersona) {
+        setActivePersona(targetPersona);
+      }
+      setRouteNotice(null);
+      nav.navigateTo({ kind: "campaign", campaignId: newBundle.campaign.id });
+    },
+    [nav, resetCampaignUiState]
+  );
 
   const storyMetrics = useMemo(() => {
     if (!bundle) {
@@ -353,16 +472,12 @@ export const App: React.FC = () => {
   );
 
   const handleCloseCampaign = () => {
-    try {
-      localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
-    } catch {}
+    campaignLoadSeqRef.current += 1;
+    resetCampaignUiState();
     setBundle(null);
     setCampaignWorld(null);
     setCampaignCharacter(null);
-    setCampaignWorldSheetTab(null);
-    setStoryModalTab(null);
-    setScrollTargetTurn(null);
-    setIsPartyModalOpen(false);
+    nav.navigateTo({ kind: "home" });
   };
 
   const refreshHomeMessages = async () => {
@@ -374,7 +489,7 @@ export const App: React.FC = () => {
     }
   };
 
-  const loadWorkspaceData = async () => {
+  const loadWorkspaceData = async (targetRoute?: AppRoute) => {
     const [camps, wList, cList, cfg, userNotes, personaList, profModels, homeMsgs] = await Promise.all([
       api.listCampaigns(),
       api.listWorlds(),
@@ -398,17 +513,18 @@ export const App: React.FC = () => {
       ? personaList.find((p) => p.id === storedPersonaId)
       : null;
     setActivePersona(matchedDefault || personaList[0] || null);
-    const storedCampaignId = localStorage.getItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
-    const activeCamp = storedCampaignId ? camps.find((c) => c.id === storedCampaignId) : null;
-    if (activeCamp) {
-      await loadCampaignBundle(activeCamp.id, wList, cList);
+    setActiveWorld(wList[0] ?? null);
+    setActiveCharacter(cList[0] ?? null);
+
+    const routeToLoad = targetRoute ?? nav.getCurrentRoute();
+    if (routeToLoad.kind === "campaign") {
+      await openCampaignById(routeToLoad.campaignId, wList, cList);
     } else {
       setBundle(null);
       setCampaignWorld(null);
       setCampaignCharacter(null);
-      setActiveWorld(wList[0] ?? null);
-      setActiveCharacter(cList[0] ?? null);
     }
+    setWorkspaceLoaded(true);
   };
 
   const refreshAuthStatus = async () => {
@@ -427,8 +543,12 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     setOnUnauthorizedHandler(() => {
+      campaignLoadSeqRef.current += 1;
+      setWorkspaceLoaded(false);
       setCurrentUser(null);
       setBundle(null);
+      setCampaignWorld(null);
+      setCampaignCharacter(null);
       setShowProfileModal(false);
       setShowAdminModal(false);
     });
@@ -444,45 +564,81 @@ export const App: React.FC = () => {
     })();
   }, []);
 
+  // Synchronize browser Back/Forward route transitions with loaded campaign state.
+  useEffect(() => {
+    if (!workspaceLoaded || !currentUser || authChecking || setupRequired) {
+      return;
+    }
+    if (nav.route.kind === "home") {
+      campaignLoadSeqRef.current += 1;
+      if (bundle !== null) {
+        resetCampaignUiState();
+        setBundle(null);
+        setCampaignWorld(null);
+        setCampaignCharacter(null);
+      }
+      return;
+    }
+    if (bundle?.campaign.id !== nav.route.campaignId) {
+      void openCampaignById(nav.route.campaignId);
+    }
+  }, [
+    authChecking,
+    bundle,
+    currentUser,
+    nav.route,
+    openCampaignById,
+    resetCampaignUiState,
+    setupRequired,
+    workspaceLoaded,
+  ]);
+
   const handleAuthenticated = async (session: AuthSessionResponse) => {
     setSetupRequired(false);
     setSingleUserMode(session.single_user_mode);
     setCurrentUser(session.user);
-    await loadWorkspaceData();
+    await loadWorkspaceData(nav.getCurrentRoute());
   };
 
   const handleLogout = async () => {
-    try {
-      localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
-    } catch {}
+    campaignLoadSeqRef.current += 1;
+    setWorkspaceLoaded(false);
     await api.logout();
     const status = await refreshAuthStatus();
     if (!status.authenticated) {
       setCurrentUser(null);
       setBundle(null);
+      setCampaignWorld(null);
+      setCampaignCharacter(null);
       setCampaigns([]);
       setWorlds([]);
       setCharacters([]);
       setPersonas([]);
       setActivePersona(null);
       setNotes([]);
+      setRouteNotice(null);
+      nav.replaceRoute({ kind: "home" });
     }
   };
 
   const handleAccountDeleted = async () => {
-    try {
-      localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
-    } catch {}
+    campaignLoadSeqRef.current += 1;
+    setWorkspaceLoaded(false);
     setShowProfileModal(false);
     setShowAdminModal(false);
     setStoredSessionToken(null);
     setCurrentUser(null);
     setBundle(null);
+    setCampaignWorld(null);
+    setCampaignCharacter(null);
     setCampaigns([]);
     setWorlds([]);
     setCharacters([]);
     setPersonas([]);
     setActivePersona(null);
+    setNotes([]);
+    setRouteNotice(null);
+    nav.replaceRoute({ kind: "home" });
     setNotes([]);
     try {
       await api.logout();
@@ -608,14 +764,12 @@ export const App: React.FC = () => {
         setWorlds(updatedWorlds);
 
         if (bundle?.campaign.id === deletedCampId) {
-          try {
-            localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
-          } catch {}
+          campaignLoadSeqRef.current += 1;
+          resetCampaignUiState();
           setBundle(null);
           setCampaignWorld(null);
           setCampaignCharacter(null);
-          setCampaignWorldSheetTab(null);
-          setIsPartyModalOpen(false);
+          nav.replaceRoute({ kind: "home" });
         }
       }
       setDeleteTarget(null);
@@ -845,8 +999,13 @@ export const App: React.FC = () => {
           currentUser={currentUser}
           singleUserMode={singleUserMode}
           homeMessages={homeMessages}
+          routeNotice={routeNotice}
+          onDismissRouteNotice={() => setRouteNotice(null)}
           notesCount={notes.length}
-          onSelectCampaign={(c) => loadCampaignBundle(c.id)}
+          onSelectCampaign={(c) => {
+            setRouteNotice(null);
+            nav.navigateTo({ kind: "campaign", campaignId: c.id });
+          }}
           onInspectCharacter={(c) => setInspectingCharacter(c)}
           onInspectWorld={(w) => setInspectingWorld(w)}
           onEditPersona={(p) => {
@@ -1104,7 +1263,6 @@ export const App: React.FC = () => {
 
       {/* Modals */}
       <AppModals
-        ACTIVE_CAMPAIGN_STORAGE_KEY={ACTIVE_CAMPAIGN_STORAGE_KEY}
         DEFAULT_PERSONA_STORAGE_KEY={DEFAULT_PERSONA_STORAGE_KEY}
         currentUser={currentUser}
         setCurrentUser={setCurrentUser}
@@ -1118,7 +1276,6 @@ export const App: React.FC = () => {
         setCampaigns={setCampaigns}
         notes={notes}
         bundle={bundle}
-        setBundle={setBundle}
         activeWorld={activeWorld}
         setActiveWorld={setActiveWorld}
         activeCharacter={activeCharacter}
@@ -1179,11 +1336,24 @@ export const App: React.FC = () => {
         handleDeleteNote={handleDeleteNote}
         handleToggleNoteStar={handleToggleNoteStar}
         handleSetDefaultPersona={handleSetDefaultPersona}
+        onLaunchCampaign={launchCreatedCampaign}
         handleAccountDeleted={handleAccountDeleted}
         refreshAuthStatus={refreshAuthStatus}
         loadWorkspaceData={loadWorkspaceData}
+      />
+
+      <NavigationGuardModal
+        prompt={nav.guardPrompt}
+        onConfirm={nav.confirmGuard}
+        onCancel={nav.cancelGuard}
       />
     </div>
     </LocalRelayProvider>
   );
 };
+
+export const App: React.FC = () => (
+  <NavigationHistoryProvider>
+    <AppShell />
+  </NavigationHistoryProvider>
+);
