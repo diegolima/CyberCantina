@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   BookOpen,
   Eye,
@@ -16,6 +16,7 @@ import {
   RecalledMemoryItem,
   WorldRecord,
 } from "../../types";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import { isSecretLoreRevealed } from "../world/codexHelpers";
 
@@ -466,13 +467,12 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
     onClose,
   });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    dialogRef,
+  });
 
   const visibleCount = useMemo(
     () =>
@@ -503,6 +503,8 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
   return (
     <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 70 }}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal-panel"
         style={{ width: "min(860px, 94vw)" }}
         onClick={(e) => e.stopPropagation()}

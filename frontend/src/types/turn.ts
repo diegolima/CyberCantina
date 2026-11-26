@@ -584,3 +584,33 @@ export interface LiveStreamState {
   isNarrator?: boolean;
   isSolo?: boolean;
 }
+
+export type CampaignStreamErrorKind =
+  | "turn_pre_save"
+  | "turn_post_save"
+  | "action";
+
+export type CampaignTurnSendOutcome =
+  | "completed"
+  | "aborted"
+  | "failed_pre_save"
+  | "failed_post_save";
+
+export interface CampaignTurnSendOptions {
+  userMessage: string;
+  parentTurnId?: string | null;
+  diceMode?: DiceMode;
+  manualDiceOverride?: number | null;
+  narrativeMode?: NarrativeMode;
+  narratorDirective?: string | null;
+  durationMinutes?: number | null;
+  characterChoices?: Record<string, CharacterChoiceSet>;
+  partyAction?: PartyActionSpec | null;
+}
+
+export interface CampaignStreamError {
+  kind: CampaignStreamErrorKind;
+  message: string;
+  retryable: boolean;
+  failedTurnOpts?: CampaignTurnSendOptions | null;
+}

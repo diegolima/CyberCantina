@@ -432,7 +432,14 @@
     height: 40px;
   }
 
-  /* Prevent iOS Safari auto-zoom on < 16px inputs across map, composer, choices & codex */
+  /* Prevent iOS Safari auto-zoom on < 16px inputs across forms, modals, map, composer & codex */
+  .field-input,
+  .field-textarea,
+  .field-select,
+  .form-input,
+  .form-select,
+  .field-input--compact,
+  .tag-chips-inline-input,
   .map-fullscreen-modal-panel input[type="text"],
   .map-fullscreen-modal-panel input[type="number"],
   .map-fullscreen-modal-panel textarea,
@@ -686,6 +693,7 @@
   }
 
   .composer-send-btn,
+  .btn.composer-stop-btn,
   .btn.gm-send-btn,
   .btn.gm-stop-btn {
     min-height: 32px;

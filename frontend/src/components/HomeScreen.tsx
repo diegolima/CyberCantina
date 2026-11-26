@@ -170,7 +170,8 @@ const HomeCard: React.FC<HomeCardProps> = ({
       )}
 
       {/* Upper Main Clickable Zone (Opens Selector Modal) */}
-      <div
+      <button
+        type="button"
         className="home-card-main-zone"
         onClick={onCardClick}
         title={`Browse & select ${title.toLowerCase()}`}
@@ -199,20 +200,18 @@ const HomeCard: React.FC<HomeCardProps> = ({
             {count} {countLabel}
           </div>
         </div>
-      </div>
+      </button>
 
       {/* Full-width Bottom "+ New" Shelf */}
-      <div
+      <button
+        type="button"
         className="home-card-new-shelf"
-        onClick={(e) => {
-          e.stopPropagation();
-          onNewClick();
-        }}
+        onClick={onNewClick}
         title={`Create new ${singular}`}
       >
         <Plus size={14} className="home-card-new-shelf-icon" />
         <span>New {singular}</span>
-      </div>
+      </button>
     </div>
   );
 };
@@ -423,7 +422,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
           {/* User profile widget */}
           {currentUser && (
-            <div
+            <button
+              type="button"
               className="home-nav-profile-chip"
               onClick={onOpenProfile}
               title="Open Profile, Password & Passkeys"
@@ -443,7 +443,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   {currentUser.role}
                 </span>
               </div>
-            </div>
+            </button>
           )}
 
           {/* Sign Out Button (if not singleUserMode) */}

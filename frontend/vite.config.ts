@@ -8,7 +8,7 @@ export default defineConfig({
     VitePWA({
       registerType: "prompt",
       injectRegister: false,
-      includeAssets: ["icons/favicon.svg", "icons/apple-touch-icon.png", "offline.html"],
+      includeAssets: ["icons/favicon.svg", "icons/apple-touch-icon.png"],
       manifest: {
         name: "CyberCantina — Agentic AI Roleplay Studio",
         short_name: "CyberCantina",

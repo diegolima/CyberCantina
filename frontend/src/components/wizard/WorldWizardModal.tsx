@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useId, useMemo, useRef, useState } from "react";
 import { Globe, Sparkles, X } from "lucide-react";
 import { api } from "../../api";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import { WorldRecord, WorldWizardDraft } from "../../types";
 import {
@@ -49,7 +50,7 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
       locationCount !== 4
   );
 
-  useOverlayBackHandler({
+  const { requestClose } = useOverlayBackHandler({
     id: "world-wizard-seed",
     isOpen: !draftWorld,
     isDirty: isSeedDirty,
@@ -61,6 +62,15 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
       confirmLabel: "Discard",
       cancelLabel: "Stay",
     },
+  });
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: !draftWorld,
+    onClose: requestClose,
+    disableEscape: loading,
+    dialogRef,
   });
 
   const handleGenerateDraft = async (e: React.FormEvent) => {
@@ -113,13 +123,20 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel"
+      >
         <div className="modal-header">
-          <span style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--accent-cyan)" }}>
+          <span id={titleId} style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--accent-cyan)" }}>
             <Globe size={18} />
             1.2 World & Spatial Topology Wizard
           </span>
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={requestClose} aria-label="Close modal">
             <X size={15} />
           </button>
         </div>
@@ -184,7 +201,7 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
-              <button type="button" className="btn" onClick={onClose}>
+              <button type="button" className="btn" onClick={requestClose}>
                 Cancel
               </button>
               <button type="submit" className="btn btn-cyan" disabled={loading}>

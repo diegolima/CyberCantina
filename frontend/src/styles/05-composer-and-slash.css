@@ -421,6 +421,27 @@
   gap: 6px;
 }
 
+.btn.composer-stop-btn {
+  min-height: 28px;
+  padding: 4px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: var(--rose-border);
+  background: var(--rose-bg);
+  color: var(--rose-fg-soft);
+}
+
+.btn.composer-stop-btn:hover:not(:disabled) {
+  background: var(--rose-bg-hover);
+  border-color: var(--accent-rose);
+  color: #ffffff;
+}
+
 /* Mention Autocomplete Popover */
 .mention-picker-popover {
   position: absolute;

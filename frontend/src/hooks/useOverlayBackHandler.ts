@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useOptionalNavigationHistory } from "../providers/NavigationHistoryContext";
 import type { OverlayBackGuard } from "../types";
 
@@ -11,10 +11,16 @@ export interface UseOverlayBackHandlerOptions {
   guard?: OverlayBackGuard;
 }
 
+export interface UseOverlayBackHandlerResult {
+  requestClose: () => void;
+}
+
 /**
  * Registers an open overlay (modal, picker, confirmation, or mobile drawer)
  * with the centralized browser Back-stack coordinator.
  *
+ * Returns `requestClose()` which honors `isDirty` (surfacing `NavigationGuardModal`
+ * before closing) when invoked from backdrop clicks, X/Cancel buttons, or Escape.
  * Safely no-ops when rendered outside NavigationHistoryProvider (e.g., SSR unit tests).
  */
 export function useOverlayBackHandler({
@@ -24,7 +30,7 @@ export function useOverlayBackHandler({
   priority = 0,
   isDirty = false,
   guard,
-}: UseOverlayBackHandlerOptions): void {
+}: UseOverlayBackHandlerOptions): UseOverlayBackHandlerResult {
   const nav = useOptionalNavigationHistory();
   const seqRef = useRef<number | null>(null);
   const onCloseRef = useRef(onClose);
@@ -60,4 +66,14 @@ export function useOverlayBackHandler({
       guard,
     });
   }, [nav, isOpen, isDirty, guard]);
+
+  const requestClose = useCallback(() => {
+    if (nav && seqRef.current !== null) {
+      nav.requestOverlayClose(seqRef.current);
+      return;
+    }
+    onCloseRef.current();
+  }, [nav]);
+
+  return { requestClose };
 }

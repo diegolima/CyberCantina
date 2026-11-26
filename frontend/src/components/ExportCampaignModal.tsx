@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useId, useRef, useState } from "react";
 import {
   AlertCircle,
   Bookmark,
@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { useModalDialog } from "../hooks/useModalDialog";
 import { CampaignRecord, CampaignTimelineScope } from "../types";
 import { validateExportPassword } from "../utils/importExportLogic";
 
@@ -35,6 +36,14 @@ export const ExportCampaignModal: React.FC<ExportCampaignModalProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    disableEscape: exporting,
+    dialogRef,
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,9 +73,18 @@ export const ExportCampaignModal: React.FC<ExportCampaignModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel" style={{ maxWidth: 540 }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel"
+        style={{ maxWidth: 540 }}
+      >
         <div className="modal-header">
           <span
+            id={titleId}
             style={{
               display: "flex",
               alignItems: "center",

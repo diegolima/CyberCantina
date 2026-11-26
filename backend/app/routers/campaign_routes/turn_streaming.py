@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import uuid
@@ -124,10 +125,13 @@ async def _execute_turn_stream_events(
     telemetry_tok = active_turn_telemetry.set(TurnTelemetryCollector())
     try:
         async with campaign_turn_gate.lock_for(campaign_id):
-            async for packet in _execute_turn_stream_events_unlocked(
-                campaign_id, req, owner_id=owner_id
-            ):
-                yield packet
+            async with contextlib.aclosing(
+                _execute_turn_stream_events_unlocked(
+                    campaign_id, req, owner_id=owner_id
+                )
+            ) as stream:
+                async for packet in stream:
+                    yield packet
     finally:
         active_turn_telemetry.reset(telemetry_tok)
 
@@ -698,6 +702,8 @@ async def _execute_turn_stream_events_unlocked(
                 on_progress=_phase3_progress_cb,
             )
             await p3_queue.put(_StreamPacketItem(event="_p3_internal_done", data={"cognitions": cogs}))
+        except asyncio.CancelledError:
+            raise
         except BaseException as exc:
             await p3_queue.put(_StreamErrorItem(exception=exc))
         finally:
@@ -718,7 +724,9 @@ async def _execute_turn_stream_events_unlocked(
                 yield {"event": item.event, "data": item.data}
     finally:
         if not p3_task.done():
-            await asyncio.shield(p3_task)
+            p3_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await p3_task
 
     # PHASE 4: Narrative Prose Generation & Streaming
     actor_ctx_ceiling, actor_reserved_out = resolve_actor_context_ceiling(eff_actor)
@@ -1057,6 +1065,9 @@ async def stream_campaign_turn(
             )
             err_payload = json.dumps({"error": "Invalid turn request."})
             yield f"event: error\ndata: {err_payload}\n\n"
+        except asyncio.CancelledError:
+            # Client cancelled/aborted mid-stream before turn_saved: exit cleanly.
+            return
         except Exception:
             logger.exception("Turn stream failed for campaign '%s'", sanitize_log_value(campaign_id))
             err_payload = json.dumps({"error": "An internal error occurred while streaming the turn."})

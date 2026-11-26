@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useId, useMemo, useRef, useState } from "react";
+import { useModalDialog } from "../hooks/useModalDialog";
 import {
   Check,
   Download,
@@ -60,6 +61,13 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [failedThumbUrls, setFailedThumbUrls] = useState<Record<string, boolean>>({});
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    dialogRef,
+  });
 
   const categoryMeta = useMemo(() => {
     switch (category) {
@@ -151,6 +159,11 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="modal-panel"
         style={{ width: "min(720px, 94vw)", maxHeight: "88vh", display: "flex", flexDirection: "column" }}
         onClick={(e) => e.stopPropagation()}
@@ -159,7 +172,7 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
         <div className="modal-header" style={{ flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {categoryMeta.icon}
-            <span style={{ fontWeight: 700, fontSize: "1.05rem" }}>
+            <span id={titleId} style={{ fontWeight: 700, fontSize: "1.05rem" }}>
               Select {categoryMeta.singular}
             </span>
             <span

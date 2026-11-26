@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -23,6 +23,7 @@ import {
   type PartyRecord,
 } from "../../types";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import {
   getCharacterParty,
   getNpcOnlyParties,
@@ -159,6 +160,14 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
     }
   }, [isOpen, eligibleNpcLocations, npcBuilderLocId]);
 
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalDialog({
+    isOpen,
+    onClose,
+    disableEscape: busyAction,
+    dialogRef,
+  });
+
   if (!isOpen) return null;
 
   const isLocked = isMutatingLocked || busyAction;
@@ -238,12 +247,14 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
   return (
     <div
       className="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Party Management"
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Party Management"
+        tabIndex={-1}
         className="modal-panel party-modal-card"
         onClick={(e) => e.stopPropagation()}
       >

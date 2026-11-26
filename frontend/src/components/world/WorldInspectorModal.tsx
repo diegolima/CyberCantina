@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../api";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import {
   LOCATION_LORE_CATEGORIES,
@@ -428,7 +429,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       ? isDirty || campaignWorldLoreDirty
       : isDirty;
 
-  useOverlayBackHandler({
+  const { requestClose } = useOverlayBackHandler({
     id:
       mode === "wizard"
         ? "world-wizard-draft"
@@ -450,6 +451,15 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       confirmLabel: "Discard",
       cancelLabel: "Stay",
     },
+  });
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose: requestClose,
+    disableEscape: showExportDialog || showReimagineModal || saving,
+    dialogRef,
   });
 
   useOverlayBackHandler({
@@ -763,14 +773,19 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   return (
     <div
       className="modal-backdrop"
-      onClick={mode === "wizard" ? undefined : onClose}
+      onClick={mode === "wizard" ? undefined : requestClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="modal-panel modal-panel--sheet-wide"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span id={titleId} style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Globe size={18} color="var(--accent-cyan)" />
             World Sheet
             {isCampaignMode && campaignUnlockLore && (
@@ -804,7 +819,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               </span>
             )}
           </span>
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={requestClose} aria-label="Close modal">
             <X size={15} />
           </button>
         </div>
@@ -1492,7 +1507,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   type="button"
                   className="btn"
                   disabled={saving}
-                  onClick={onClose}
+                  onClick={requestClose}
                 >
                   Cancel
                 </button>
@@ -1536,7 +1551,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                     {exportingWorld ? "Exporting..." : "Export (.zcc)"}
                   </button>
                 )}
-                <button type="button" className="btn" onClick={onClose}>
+                <button type="button" className="btn" onClick={requestClose}>
                   {isDirty ? "Cancel" : "Close"}
                 </button>
                 {isDirty && (

@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { DoorOpen, X } from "lucide-react";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import type {
   CompassDirection,
   LocationContainer,
@@ -63,6 +64,13 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
     }
   }, [promptMeters]);
 
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalDialog({
+    isOpen: Boolean(promotionPrompt),
+    onClose: () => onChangePrompt(null),
+    dialogRef,
+  });
+
   if (!promotionPrompt) return null;
   const setPromotionPrompt = onChangePrompt;
   const resolvedMeters =
@@ -80,10 +88,12 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
 
   return (
             <div
+              ref={dialogRef}
               className="map-inner-dialog-backdrop"
               role="dialog"
               aria-modal="true"
               aria-label="Container Connection & Portal Setup"
+              tabIndex={-1}
               style={{
                 position: "absolute",
                 inset: 0,

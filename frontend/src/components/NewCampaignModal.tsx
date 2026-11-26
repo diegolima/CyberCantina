@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useId, useRef, useState } from "react";
+import { useModalDialog } from "../hooks/useModalDialog";
 import {
   AlertCircle,
   ArrowLeft,
@@ -146,6 +147,14 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
   // --- Submission State ---
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    disableEscape: isSubmitting,
+    dialogRef,
+  });
 
   const handleWorldChange = (worldId: string) => {
     setSelectedWorldId(worldId);
@@ -241,6 +250,11 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="modal-panel"
         style={{
           width: "min(620px, 95vw)",
@@ -306,7 +320,7 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
         <div className="modal-header">
           <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--accent-emerald)" }}>
             <FolderPlus size={18} />
-            <span style={{ fontWeight: 600 }}>Launch Campaign</span>
+            <span id={titleId} style={{ fontWeight: 600 }}>Launch Campaign</span>
           </div>
 
           {/* Step Badges */}
@@ -610,7 +624,8 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
                       <input
                         type="checkbox"
                         checked={isSelected}
-                        onChange={() => {}} // handled by parent onClick
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => handleToggleChar(char.id)}
                         style={{ cursor: "pointer" }}
                       />
                       <div style={{ flex: 1, minWidth: 0 }}>

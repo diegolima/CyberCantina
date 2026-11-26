@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { useModalDialog } from "../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import {
   AppSettings,
@@ -131,8 +132,6 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
         personaBio,
         tags,
         buildAndHeight,
-        portraitUrl,
-        gallery,
         distinctiveFeatures,
         loreEntries,
         equipped,
@@ -150,8 +149,6 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
       personaBio,
       tags,
       buildAndHeight,
-      portraitUrl,
-      gallery,
       distinctiveFeatures,
       loreEntries,
       equipped,
@@ -180,7 +177,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
     !isReadOnly &&
     (clonedMode || currentSnapshot !== baselineSnapshotRef.current);
 
-  useOverlayBackHandler({
+  const { requestClose } = useOverlayBackHandler({
     id: "persona-editor",
     isOpen: true,
     priority: 5,
@@ -193,6 +190,15 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
       confirmLabel: "Discard",
       cancelLabel: "Stay",
     },
+  });
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose: requestClose,
+    disableEscape: saving || deleting,
+    dialogRef,
   });
 
   // Shortcut pills for quick demographic & height selection
@@ -370,8 +376,13 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={requestClose}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="modal-panel modal-panel--sheet"
         onClick={(e) => e.stopPropagation()}
       >
@@ -379,7 +390,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
         <div className="modal-header">
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <UserCheck size={18} color="var(--accent-emerald)" />
-            <span style={{ fontWeight: 700, fontSize: "1.05rem" }}>
+            <span id={titleId} style={{ fontWeight: 700, fontSize: "1.05rem" }}>
               Persona Sheet
             </span>
             <span style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>
@@ -412,7 +423,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
           <button
             type="button"
             className="btn"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close modal"
           >
             <X size={15} />
@@ -1380,7 +1391,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
               <button
                 type="button"
                 className="btn"
-                onClick={onClose}
+                onClick={requestClose}
                 disabled={saving || deleting}
               >
                 {isReadOnly ? "Close" : "Cancel"}

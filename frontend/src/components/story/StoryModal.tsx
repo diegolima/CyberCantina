@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bookmark,
   ChevronDown,
@@ -20,6 +20,7 @@ import type {
   MechanicsTopicId,
 } from "../../types";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
 import { BranchGraphCanvas } from "./BranchGraphCanvas";
 import { countVisibleTimelines } from "./branchGraphLayout";
@@ -126,17 +127,12 @@ export const StoryModal: React.FC<StoryModalProps> = ({
     }
   }, [isOpen, initialTab, initialExpandedMajorEventKey]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [isOpen, onClose]);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalDialog({
+    isOpen,
+    onClose,
+    dialogRef,
+  });
 
   const timelineCount = useMemo(
     () =>
@@ -257,11 +253,13 @@ export const StoryModal: React.FC<StoryModalProps> = ({
       className="modal-backdrop"
       onClick={onClose}
       style={{ zIndex: 75 }}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Campaign Story and Timelines"
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Campaign Story and Timelines"
+        tabIndex={-1}
         className="modal-panel story-modal-panel"
         onClick={(e) => e.stopPropagation()}
       >

@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useId, useRef } from "react";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import {
   Activity,
   ArrowRight,
@@ -95,6 +96,14 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
   turnProgress,
   onClose,
 }) => {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    dialogRef,
+  });
+
   const isClerk = target.agentKey === "clerk";
   const turn =
     bundle.all_turn_nodes.find((t) => t.id === target.turnId) ||
@@ -196,6 +205,11 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
     return (
       <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 85 }}>
         <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          tabIndex={-1}
           className="modal-panel"
           style={{ width: "min(720px, 94vw)", maxHeight: "90vh" }}
           onClick={(e) => e.stopPropagation()}
@@ -218,7 +232,7 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
               >
                 <Globe size={13} />
               </div>
-              <span style={{ fontWeight: 700, fontSize: "1rem" }}>
+              <span id={titleId} style={{ fontWeight: 700, fontSize: "1rem" }}>
                 Global World Clerk
               </span>
               <span className="badge-clerk-pill">clerk</span>
@@ -680,6 +694,11 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
   return (
     <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 85 }}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="modal-panel"
         style={{ width: "min(720px, 94vw)", maxHeight: "90vh" }}
         onClick={(e) => e.stopPropagation()}
@@ -702,7 +721,7 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
             >
               <Bot size={13} />
             </div>
-            <span style={{ fontWeight: 700, fontSize: "1rem" }}>{charName}</span>
+            <span id={titleId} style={{ fontWeight: 700, fontSize: "1rem" }}>{charName}</span>
             <span
               className="badge"
               style={{

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, api } from "../../api";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import { PromptPresetsManager } from "../PromptPresetsManager";
 import { AppSettings, UserProfile } from "../../types";
@@ -187,6 +188,14 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
   } | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    disableEscape: Boolean(feedback || pendingPurgeConfirm),
+    dialogRef,
+  });
 
   const loadUsers = async (preferredUserId?: string | null) => {
     setLoading(true);
@@ -227,9 +236,16 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel modal-panel--sheet">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel modal-panel--sheet"
+      >
         <div className="modal-header">
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span id={titleId} style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <UserCog size={18} color="var(--accent-amber)" />
             Admin Settings
           </span>

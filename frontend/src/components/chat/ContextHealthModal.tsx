@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -24,6 +24,7 @@ import type {
 } from "../../types";
 import { LoreIndexPanel, buildLoreIndexEntries } from "../inspector/LoreIndexModal";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import {
   PHASE_DISPLAY_META,
   TELEMETRY_PHASE_ORDER,
@@ -131,6 +132,12 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
   }));
   const [showAllFlags, setShowAllFlags] = useState(false);
   const [expandedRecalls, setExpandedRecalls] = useState<Set<string>>(new Set());
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalDialog({
+    isOpen,
+    onClose,
+    dialogRef,
+  });
 
   const inspectedTurnId = inspectedTurn?.id ?? null;
 
@@ -254,12 +261,14 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
   return (
     <div
       className="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Context Health & Diagnostics"
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Context Health & Diagnostics"
+        tabIndex={-1}
         className="modal-panel context-health-modal"
         onClick={(e) => e.stopPropagation()}
       >

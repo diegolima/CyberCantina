@@ -32,6 +32,7 @@ import {
 } from "./providers/NavigationHistoryContext";
 import { NavigationGuardModal } from "./components/shared/NavigationGuardModal";
 import { PwaUpdateBanner } from "./components/shared/PwaUpdateBanner";
+import { ServerUnreachableScreen } from "./components/shared/ServerUnreachableScreen";
 import { useCampaignTurnActions } from "./hooks/useCampaignTurnActions";
 import { useOverlayBackHandler } from "./hooks/useOverlayBackHandler";
 import { usePwaLifecycle } from "./hooks/usePwaLifecycle";
@@ -40,6 +41,10 @@ import { getShellClassNames } from "./utils/campaignLayout";
 import { slugifyTag } from "./utils/noteSearch";
 import { formatPartyActionTurnMessage } from "./utils/partyCommand";
 import { getActiveParties } from "./utils/partyHelpers";
+import {
+  formatServerUnreachableDetail,
+  isServerUnreachableError,
+} from "./utils/serverReachability";
 import {
   AppRoute,
   AppSettings,
@@ -60,6 +65,8 @@ const AppShell: React.FC = () => {
   const nav = useNavigationHistory();
   const pwa = usePwaLifecycle();
   const [authChecking, setAuthChecking] = useState(true);
+  const [serverUnreachable, setServerUnreachable] = useState<string | null>(null);
+  const [retryingConnection, setRetryingConnection] = useState(false);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [routeNotice, setRouteNotice] = useState<string | null>(null);
   const campaignLoadSeqRef = useRef(0);
@@ -217,6 +224,8 @@ const AppShell: React.FC = () => {
     isPhase4Running,
     phase4ProgressByTurn,
     streamError,
+    dismissStreamError,
+    stopTurnStream,
     pendingLocationOverrideId,
     setPendingLocationOverrideId,
     liveStream,
@@ -544,6 +553,28 @@ const AppShell: React.FC = () => {
     return status;
   };
 
+  const bootstrapSession = useCallback(async () => {
+    setRetryingConnection(true);
+    try {
+      const status = await refreshAuthStatus();
+      setServerUnreachable(null);
+      if (status.authenticated && status.user) {
+        await loadWorkspaceData();
+      }
+    } catch (err) {
+      if (isServerUnreachableError(err)) {
+        setServerUnreachable(
+          formatServerUnreachableDetail(err) ?? "Unable to connect to the server."
+        );
+      } else {
+        setServerUnreachable(null);
+      }
+    } finally {
+      setAuthChecking(false);
+      setRetryingConnection(false);
+    }
+  }, []);
+
   useEffect(() => {
     setOnUnauthorizedHandler(() => {
       campaignLoadSeqRef.current += 1;
@@ -555,17 +586,8 @@ const AppShell: React.FC = () => {
       setShowProfileModal(false);
       setShowAdminModal(false);
     });
-    (async () => {
-      try {
-        const status = await refreshAuthStatus();
-        if (status.authenticated && status.user) {
-          await loadWorkspaceData();
-        }
-      } finally {
-        setAuthChecking(false);
-      }
-    })();
-  }, []);
+    void bootstrapSession();
+  }, [bootstrapSession]);
 
   // Synchronize browser Back/Forward route transitions with loaded campaign state.
   useEffect(() => {
@@ -856,6 +878,27 @@ const AppShell: React.FC = () => {
     );
   }
 
+  if (serverUnreachable !== null) {
+    return (
+      <>
+        <ServerUnreachableScreen
+          retrying={retryingConnection}
+          detail={serverUnreachable}
+          onRetry={() => {
+            void bootstrapSession();
+          }}
+        />
+        <PwaUpdateBanner
+          visible={pwa.needRefresh}
+          isStreaming={false}
+          isUpdating={pwa.isUpdating}
+          onReload={pwa.applyUpdate}
+          onDismiss={pwa.dismissUpdate}
+        />
+      </>
+    );
+  }
+
   if (setupRequired) {
     return (
       <>
@@ -985,6 +1028,8 @@ const AppShell: React.FC = () => {
           phase4ProgressByTurn={phase4ProgressByTurn}
           liveStream={liveStream}
           streamError={streamError}
+          onDismissStreamError={dismissStreamError}
+          onStopTurn={stopTurnStream}
           onOpenSettings={handleOpenModelSettings}
           onSendTurn={handleSendTurn}
           onCheckoutTurn={handleCheckoutTurn}

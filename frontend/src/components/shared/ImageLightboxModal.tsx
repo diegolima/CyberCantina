@@ -8,6 +8,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 
 export interface ImageLightboxModalProps {
@@ -51,6 +52,13 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
     isOpen: true,
     priority: 15,
     onClose,
+  });
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    dialogRef,
   });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -129,11 +137,6 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-        return;
-      }
       if (e.key === "ArrowLeft" && onPrev) {
         e.preventDefault();
         e.stopPropagation();
@@ -148,7 +151,7 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, onPrev, onNext]);
+  }, [onPrev, onNext]);
 
   const navBtnStyle: React.CSSProperties = {
     position: "absolute",
@@ -167,10 +170,12 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
 
   return (
     <div
+      ref={dialogRef}
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label={label || "Image preview"}
+      tabIndex={-1}
       style={{ zIndex: 120, background: "rgba(5, 8, 16, 0.88)", padding: 20 }}
       onClick={onClose}
     >

@@ -2,14 +2,13 @@ import React from "react";
 import { Eye, MessageSquare, Radio } from "lucide-react";
 import type {
   CampaignStateBundle,
-  CharacterChoiceSet,
+  CampaignStreamError,
+  CampaignTurnSendOptions,
+  CampaignTurnSendOutcome,
   CharacterRecord,
   CharacterWhisper,
-  DiceMode,
   LiveStreamState,
   MechanicsTopicId,
-  NarrativeMode,
-  PartyActionSpec,
   Phase3TurnProgress,
   Phase4TurnProgress,
   TurnBookmarkUpdatePayload,
@@ -49,19 +48,13 @@ export interface ChatStageProps {
   phase3Progress?: Phase3TurnProgress | null;
   phase4ProgressByTurn?: Record<string, Phase4TurnProgress>;
   liveStream: LiveStreamState | null;
-  streamError?: string | null;
+  streamError?: CampaignStreamError | string | null;
+  onDismissStreamError?: () => void;
+  onStopTurn?: () => void;
   onOpenSettings?: () => void;
-  onSendTurn: (opts: {
-    userMessage: string;
-    parentTurnId?: string | null;
-    diceMode?: DiceMode;
-    manualDiceOverride?: number | null;
-    narrativeMode?: NarrativeMode;
-    narratorDirective?: string | null;
-    durationMinutes?: number | null;
-    characterChoices?: Record<string, CharacterChoiceSet>;
-    partyAction?: PartyActionSpec | null;
-  }) => void;
+  onSendTurn: (
+    opts: CampaignTurnSendOptions
+  ) => Promise<CampaignTurnSendOutcome> | void;
   onCheckoutTurn: (turnId: string) => Promise<void> | void;
   onDeleteLastTurn?: () => Promise<void> | void;
   scrollTargetTurn?: { turnId: string; nonce: number; highlight?: boolean } | null;
@@ -85,6 +78,21 @@ export interface ChatStageProps {
   onCampaignBundleChange?: (bundle: CampaignStateBundle) => void;
   onOpenCodex?: () => void;
   onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
+}
+
+export function normalizeCampaignStreamError(
+  err: CampaignStreamError | string | null | undefined
+): CampaignStreamError | null {
+  if (!err) return null;
+  if (typeof err === "string") {
+    return {
+      kind: "turn_pre_save",
+      message: err,
+      retryable: false,
+      failedTurnOpts: null,
+    };
+  }
+  return err;
 }
 
 /**

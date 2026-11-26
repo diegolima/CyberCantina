@@ -97,6 +97,7 @@ flowchart TD
     b_8 --> b_17
     b_8 --> b_20
     b_9 --> b_12
+    b_9 --> b_16
     b_9 --> b_20
     b_9 --> b_21
     b_11 --> b_1
@@ -108,6 +109,7 @@ flowchart TD
     b_12 --> b_21
     b_13 --> b_2
     b_13 --> b_12
+    b_13 --> b_16
     b_13 --> b_20
     b_14 --> b_1
     b_14 --> b_2
@@ -148,17 +150,17 @@ flowchart TD
 | `components/inspector` | 7 | `components/map`, `components/world`, `hooks`, `types`, `utils` |
 | `components/map` | 17 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
-| `components/party` | 1 | `components/shared`, `types`, `utils` |
+| `components/party` | 1 | `components/shared`, `hooks`, `types`, `utils` |
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
-| `components/shared` | 9 | `hooks`, `types`, `utils` |
-| `components/story` | 5 | `components (root)`, `components/shared`, `types` |
+| `components/shared` | 10 | `hooks`, `types`, `utils` |
+| `components/story` | 5 | `components (root)`, `components/shared`, `hooks`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `hooks`, `types` |
 | `components/world` | 17 | `api`, `components (root)`, `components/character`, `components/chat`, `components/map`, `components/shared`, `hooks`, `types`, `utils` |
-| `hooks` | 7 | `api`, `providers`, `types`, `utils` |
+| `hooks` | 8 | `api`, `providers`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 2 | `api`, `local`, `types`, `utils` |
 | `types` | 19 | *(leaf)* |
-| `utils` | 19 | `types` |
+| `utils` | 20 | `types` |
 | `vite-env.d` | 1 | *(leaf)* |

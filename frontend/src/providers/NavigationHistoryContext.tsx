@@ -54,6 +54,7 @@ export interface NavigationHistoryContextValue {
   registerOverlay: (registration: OverlayRegistration) => number;
   updateOverlay: (seq: number, patch: Partial<OverlayRegistration>) => void;
   unregisterOverlay: (seq: number) => void;
+  requestOverlayClose: (seq: number) => void;
   guardPrompt: NavigationGuardPrompt | null;
   confirmGuard: () => void;
   cancelGuard: () => void;
@@ -471,6 +472,47 @@ export const NavigationHistoryProvider: React.FC<{
     [scheduleReconcile]
   );
 
+  const requestOverlayClose = useCallback(
+    (seq: number) => {
+      const entry = overlaysRef.current.find((item) => item.seq === seq);
+      if (!entry) return;
+      if (entry.isDirty) {
+        const g = entry.guard;
+        pendingGuardActionRef.current = {
+          kind: "overlay",
+          overlayId: entry.id,
+          onConfirm: entry.onClose,
+        };
+        updateGuardPrompt({
+          kind: "overlay",
+          title: g?.title ?? DEFAULT_OVERLAY_GUARD.title,
+          message: g?.message ?? DEFAULT_OVERLAY_GUARD.message,
+          confirmLabel: g?.confirmLabel ?? DEFAULT_OVERLAY_GUARD.confirmLabel,
+          cancelLabel: g?.cancelLabel ?? DEFAULT_OVERLAY_GUARD.cancelLabel,
+        });
+        return;
+      }
+      entry.onClose();
+    },
+    [updateGuardPrompt]
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      const hasDirtyOverlay = overlaysRef.current.some((entry) => entry.isDirty);
+      const hasBlockedRoute = Boolean(routeGuardRef.current?.isBlocked);
+      if (hasDirtyOverlay || hasBlockedRoute) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, []);
+
   const cancelGuard = useCallback(() => {
     pendingGuardActionRef.current = null;
     updateGuardPrompt(null);
@@ -511,6 +553,7 @@ export const NavigationHistoryProvider: React.FC<{
       registerOverlay,
       updateOverlay,
       unregisterOverlay,
+      requestOverlayClose,
       guardPrompt,
       confirmGuard,
       cancelGuard,
@@ -524,6 +567,7 @@ export const NavigationHistoryProvider: React.FC<{
       registerOverlay,
       updateOverlay,
       unregisterOverlay,
+      requestOverlayClose,
       guardPrompt,
       confirmGuard,
       cancelGuard,

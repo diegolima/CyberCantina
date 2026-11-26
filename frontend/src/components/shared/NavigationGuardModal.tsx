@@ -1,5 +1,6 @@
-import React, { useEffect } from "react";
+import React, { useRef } from "react";
 import { AlertTriangle, X } from "lucide-react";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import type { NavigationGuardPrompt } from "../../types";
 
 export interface NavigationGuardModalProps {
@@ -13,20 +14,12 @@ export const NavigationGuardModal: React.FC<NavigationGuardModalProps> = ({
   onConfirm,
   onCancel,
 }) => {
-  useEffect(() => {
-    if (!prompt || typeof window === "undefined") return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        onCancel();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [prompt, onCancel]);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalDialog({
+    isOpen: Boolean(prompt),
+    onClose: onCancel,
+    dialogRef,
+  });
 
   if (!prompt) return null;
 
@@ -34,11 +27,13 @@ export const NavigationGuardModal: React.FC<NavigationGuardModalProps> = ({
     <div
       className="modal-backdrop nav-guard-backdrop"
       onClick={onCancel}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="nav-guard-title"
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="nav-guard-title"
+        tabIndex={-1}
         className="modal-panel nav-guard-panel"
         onClick={(e) => e.stopPropagation()}
       >

@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useId, useRef } from "react";
 import { AlertTriangle, X } from "lucide-react";
+import { useModalDialog } from "../hooks/useModalDialog";
 import type {
   CampaignRecord,
   CharacterRecord,
@@ -40,15 +41,33 @@ export const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = (
   onCancel,
   onConfirm,
 }) => {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: Boolean(deleteTarget),
+    onClose: onCancel,
+    disableEscape: isDeleting,
+    dialogRef,
+  });
+
   if (!deleteTarget) return null;
   const setDeleteTarget = (_: null) => onCancel();
   const handleConfirmDelete = onConfirm;
 
   return (
         <div className="modal-backdrop">
-          <div className="modal-panel" style={{ width: "min(480px, 92vw)" }}>
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+            tabIndex={-1}
+            className="modal-panel"
+            style={{ width: "min(480px, 92vw)" }}
+          >
             <div className="modal-header">
               <span
+                id={titleId}
                 style={{
                   display: "flex",
                   alignItems: "center",

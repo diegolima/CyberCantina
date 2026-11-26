@@ -7,6 +7,8 @@ import {
   Menu,
   PanelRightClose,
   PanelRightOpen,
+  RefreshCw,
+  X,
 } from "lucide-react";
 import {
   ActiveSlashCommand,
@@ -68,6 +70,7 @@ import {
 } from "./inspector/AgentChangesModal";
 import {
   isTurnFeedScrolledAwayFromBottom,
+  normalizeCampaignStreamError,
   type ChatStageProps,
 } from "./chat/chatHelpers";
 import { TurnCard } from "./chat/TurnCard";
@@ -89,6 +92,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   phase4ProgressByTurn = {},
   liveStream,
   streamError,
+  onDismissStreamError,
+  onStopTurn,
   onOpenSettings,
   onSendTurn,
   onCheckoutTurn,
@@ -129,6 +134,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     diceOverride: string;
     stagedChoices: Record<string, CharacterChoiceSet>;
   } | null>(null);
+  const inputTextRef = useRef(inputText);
+  inputTextRef.current = inputText;
+  const activeSlashRef = useRef(activeSlash);
+  activeSlashRef.current = activeSlash;
   const handleCancelEditRef = useRef<() => void>(() => {});
   const [isDeletingTurn, setIsDeletingTurn] = useState(false);
   const [customDirectiveText, setCustomDirectiveText] = useState("");
@@ -246,6 +255,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   // Director Choices State
   const [stagedChoices, setStagedChoices] = useState<Record<string, CharacterChoiceSet>>({});
+  const stagedChoicesRef = useRef(stagedChoices);
+  stagedChoicesRef.current = stagedChoices;
   const [activeChoiceCharId, setActiveChoiceCharId] = useState<string>(character.id);
   const [choicePreview, setChoicePreview] = useState<ChoicePreviewResponse | null>(null);
   const [, setIsPreviewLoading] = useState(false);
@@ -1439,27 +1450,54 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       ? inferNarratorTurnOptions(editingTurn, raw)
       : { isNarrator: false };
 
-    if (narratorOpts.isNarrator) {
-      onSendTurn({
-        userMessage: raw,
-        parentTurnId: targetParentId,
-        diceMode: "disabled",
-        narrativeMode: narratorOpts.narrativeMode,
-        narratorDirective: narratorOpts.narratorDirective || raw,
-        durationMinutes: narratorOpts.durationMinutes,
-      });
-    } else {
-      onSendTurn({
-        userMessage: raw,
-        parentTurnId: targetParentId,
-        diceMode,
-        manualDiceOverride: diceMode === "forced" ? parsedDice : null,
-        characterChoices: effectiveChoices,
-        partyAction:
-          partyCommandState.action ??
-          (isEditMode ? editingTurn?.pre_turn?.party_action ?? null : null),
-      });
-    }
+    const draftSnapshot = {
+      inputText,
+      activeSlash,
+      diceMode,
+      diceOverride,
+      stagedChoices,
+    };
+
+    const restoreDraftIfEmpty = () => {
+      if (
+        !inputTextRef.current.trim() &&
+        activeSlashRef.current === null &&
+        Object.keys(stagedChoicesRef.current).length === 0
+      ) {
+        setActiveSlash(draftSnapshot.activeSlash);
+        setInputText(draftSnapshot.inputText);
+        setSlashCursorPos(draftSnapshot.inputText.length);
+        setDiceMode(draftSnapshot.diceMode);
+        setDiceOverride(draftSnapshot.diceOverride);
+        setStagedChoices(draftSnapshot.stagedChoices);
+      }
+    };
+
+    const sendPromise = narratorOpts.isNarrator
+      ? onSendTurn({
+          userMessage: raw,
+          parentTurnId: targetParentId,
+          diceMode: "disabled",
+          narrativeMode: narratorOpts.narrativeMode,
+          narratorDirective: narratorOpts.narratorDirective || raw,
+          durationMinutes: narratorOpts.durationMinutes,
+        })
+      : onSendTurn({
+          userMessage: raw,
+          parentTurnId: targetParentId,
+          diceMode,
+          manualDiceOverride: diceMode === "forced" ? parsedDice : null,
+          characterChoices: effectiveChoices,
+          partyAction:
+            partyCommandState.action ??
+            (isEditMode ? editingTurn?.pre_turn?.party_action ?? null : null),
+        });
+
+    void Promise.resolve(sendPromise).then((outcome) => {
+      if (outcome === "aborted" || outcome === "failed_pre_save") {
+        restoreDraftIfEmpty();
+      }
+    });
 
     // Post-send cleanup: discard the stashed draft once the edit is saved
     stashedDraftRef.current = null;
@@ -1960,31 +1998,72 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           />
         )}
 
-        {streamError && (
-          <div
-            className="turn-card"
-            style={{
-              borderColor: "var(--accent-rose)",
-              background: "rgba(244, 63, 94, 0.1)",
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <div style={{ fontSize: "0.82rem", color: "#fda4af" }}>
-              <strong>Ollama / LLM Error:</strong> {streamError}
+        {(() => {
+          const normalizedError = normalizeCampaignStreamError(streamError);
+          if (!normalizedError) return null;
+          const heading =
+            normalizedError.kind === "action"
+              ? "Action Error:"
+              : normalizedError.kind === "turn_post_save"
+              ? "Turn Finalization Error:"
+              : "Turn Error:";
+          return (
+            <div
+              className="turn-card turn-error-card"
+              role="alert"
+              style={{
+                borderColor: "var(--accent-rose)",
+                background: "rgba(244, 63, 94, 0.1)",
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ fontSize: "0.82rem", color: "#fda4af", flex: "1 1 220px" }}>
+                <strong>{heading}</strong> {normalizedError.message}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                {normalizedError.kind === "turn_pre_save" &&
+                  normalizedError.retryable &&
+                  normalizedError.failedTurnOpts && (
+                    <button
+                      type="button"
+                      className="btn btn-amber"
+                      disabled={isBusy}
+                      onClick={() => {
+                        void onSendTurn(normalizedError.failedTurnOpts!);
+                      }}
+                    >
+                      <RefreshCw size={13} />
+                      <span>Retry</span>
+                    </button>
+                  )}
+                {normalizedError.kind === "turn_pre_save" && onOpenSettings && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={onOpenSettings}
+                  >
+                    Model Settings
+                  </button>
+                )}
+                {onDismissStreamError && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={onDismissStreamError}
+                    aria-label="Dismiss error"
+                    title="Dismiss error"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
             </div>
-            {onOpenSettings && (
-              <button
-                type="button"
-                className="btn btn-amber"
-                onClick={onOpenSettings}
-              >
-                Configure Ollama Models
-              </button>
-            )}
-          </div>
-        )}
+          );
+        })()}
         </div>
 
         {showJumpToLatest && !gmTalk.isOpen && (
@@ -2121,6 +2200,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         inputText={inputText}
         setInputText={setInputText}
         isBusy={isBusy}
+        isStreaming={isStreaming}
+        isPhase4Running={isPhase4Running}
+        onStopTurn={onStopTurn}
         magicWand={magicWand}
         activeLocationName={bundle.active_location.name}
         neighborLocations={bundle.neighbor_locations}

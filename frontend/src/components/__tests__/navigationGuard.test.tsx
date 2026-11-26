@@ -4,14 +4,20 @@ import { describe, expect, it, vi } from "vitest";
 import { NavigationGuardModal } from "../shared/NavigationGuardModal";
 import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 
-const StandaloneModalProbe: React.FC = () => {
-  useOverlayBackHandler({
+const StandaloneModalProbe: React.FC<{ onClose?: () => void }> = ({
+  onClose = () => {},
+}) => {
+  const { requestClose } = useOverlayBackHandler({
     id: "standalone-probe",
     isOpen: true,
     isDirty: true,
-    onClose: () => {},
+    onClose,
   });
-  return <div>probe-ok</div>;
+  return (
+    <button type="button" onClick={requestClose}>
+      probe-ok
+    </button>
+  );
 };
 
 describe("NavigationGuardModal & useOverlayBackHandler SSR safety", () => {

@@ -873,6 +873,7 @@ erDiagram
 | `frontend/src/components/shared/NavigationGuardModal.tsx` |
 | `frontend/src/components/shared/PhysicalStateControl.tsx` |
 | `frontend/src/components/shared/PwaUpdateBanner.tsx` |
+| `frontend/src/components/shared/ServerUnreachableScreen.tsx` |
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 | `frontend/src/components/shared/VideoUploadControls.tsx` |
 
@@ -923,6 +924,7 @@ erDiagram
 | `frontend/src/hooks/useDrawerSwipeDismiss.ts` |
 | `frontend/src/hooks/useGmTalk.ts` |
 | `frontend/src/hooks/useMagicWand.ts` |
+| `frontend/src/hooks/useModalDialog.ts` |
 | `frontend/src/hooks/useOverlayBackHandler.ts` |
 | `frontend/src/hooks/usePwaLifecycle.ts` |
 | `frontend/src/hooks/useResponsiveCampaignLayout.ts` |
@@ -996,6 +998,7 @@ erDiagram
 | `frontend/src/utils/partyHelpers.ts` |
 | `frontend/src/utils/profilePreferences.ts` |
 | `frontend/src/utils/pwa.ts` |
+| `frontend/src/utils/serverReachability.ts` |
 | `frontend/src/utils/slashCommands.ts` |
 | `frontend/src/utils/spatialDistance.ts` |
 | `frontend/src/utils/unsupportedFields.ts` |

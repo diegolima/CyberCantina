@@ -9,6 +9,7 @@ import {
   Edit3,
   Eye,
   ListChecks,
+  Loader2,
   Lock,
   MessageSquare,
   Radio,
@@ -155,6 +156,9 @@ export interface ChatComposerProps {
   inputText: string;
   setInputText: React.Dispatch<React.SetStateAction<string>>;
   isBusy: boolean;
+  isStreaming?: boolean;
+  isPhase4Running?: boolean;
+  onStopTurn?: () => void;
   magicWand: ReturnType<typeof useMagicWand>;
   activeLocationName?: string;
   neighborLocations: NeighborLocationView[];
@@ -234,6 +238,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   inputText,
   setInputText,
   isBusy,
+  isStreaming = false,
+  isPhase4Running = false,
+  onStopTurn,
   magicWand,
   activeLocationName,
   neighborLocations,
@@ -1283,43 +1290,62 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 </button>
               )}
 
-              {/* Send or Save & Swipe Button */}
-              <button
-                type="submit"
-                className="btn btn-amber composer-send-btn"
-                disabled={
-                  isBusy ||
-                  Boolean(slashHardError) ||
-                  Boolean(partySlashWarning) ||
-                  (!inputText.trim() &&
-                    !activeSlash &&
-                    totalStagedOptionsCount === 0) ||
-                  (diceMode === "forced" &&
-                    diceOverride.trim() !== "" &&
-                    (isNaN(parseInt(diceOverride, 10)) ||
-                      parseInt(diceOverride, 10) < 1 ||
-                      parseInt(diceOverride, 10) > 20))
-                }
-                title={
-                  editingTurn
-                    ? "Save modifications and generate a new swipe branch (Enter)"
-                    : "Send turn (Enter)"
-                }
-              >
-                {editingTurn ? (
-                  <>
-                    <RefreshCw size={13} className={isBusy ? "spinning" : ""} />
-                    <span>
-                      Save<span className="composer-action-label"> &amp; Swipe</span>
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <Send size={14} />
-                    <span>Send</span>
-                  </>
-                )}
-              </button>
+              {/* Stop (Phases 1-4), Finalizing (Phase 5), or Send / Save & Swipe Button */}
+              {isStreaming && onStopTurn ? (
+                <button
+                  type="button"
+                  className="btn composer-stop-btn"
+                  onClick={onStopTurn}
+                  title="Stop generating turn"
+                >
+                  <Square size={12} />
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="btn btn-amber composer-send-btn"
+                  disabled={
+                    isBusy ||
+                    Boolean(slashHardError) ||
+                    Boolean(partySlashWarning) ||
+                    (!inputText.trim() &&
+                      !activeSlash &&
+                      totalStagedOptionsCount === 0) ||
+                    (diceMode === "forced" &&
+                      diceOverride.trim() !== "" &&
+                      (isNaN(parseInt(diceOverride, 10)) ||
+                        parseInt(diceOverride, 10) < 1 ||
+                        parseInt(diceOverride, 10) > 20))
+                  }
+                  title={
+                    isPhase4Running
+                      ? "Finalizing world & character updates…"
+                      : editingTurn
+                      ? "Save modifications and generate a new swipe branch (Enter)"
+                      : "Send turn (Enter)"
+                  }
+                >
+                  {isPhase4Running ? (
+                    <>
+                      <Loader2 size={13} className="spin" />
+                      <span>Finalizing…</span>
+                    </>
+                  ) : editingTurn ? (
+                    <>
+                      <RefreshCw size={13} className={isBusy ? "spinning" : ""} />
+                      <span>
+                        Save<span className="composer-action-label"> &amp; Swipe</span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Send size={14} />
+                      <span>Send</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
           )}

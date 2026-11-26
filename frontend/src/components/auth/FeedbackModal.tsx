@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useId, useRef } from "react";
 import { AlertTriangle, Check } from "lucide-react";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 
 export interface FeedbackModalProps {
@@ -24,9 +25,25 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     onClose: onConfirm,
   });
 
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose: onConfirm,
+    dialogRef,
+  });
+
   return (
     <div className="modal-backdrop" style={{ zIndex: 1200 }}>
-      <div className="modal-panel" style={{ maxWidth: 460, padding: 0 }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel"
+        style={{ maxWidth: 460, padding: 0 }}
+      >
         <div
           className="modal-header"
           style={{
@@ -37,6 +54,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
           }}
         >
           <span
+            id={titleId}
             style={{
               display: "flex",
               alignItems: "center",

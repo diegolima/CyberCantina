@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../api";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { ProfileModelSettingsResponse, UserProfile } from "../../types";
 import {
   hasExplicitPrefSubTab,
@@ -72,6 +73,14 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
 
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    disableEscape: Boolean(feedback),
+    dialogRef,
+  });
 
   useEffect(() => {
     api
@@ -94,9 +103,16 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel profile-modal-panel">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel profile-modal-panel"
+      >
         <div className="modal-header">
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span id={titleId} style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <User size={18} color="var(--accent-amber)" />
             User Profile &amp; Preferences
           </span>

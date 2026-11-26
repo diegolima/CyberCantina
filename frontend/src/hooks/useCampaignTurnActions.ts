@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamCampaignTurn } from "../api";
 import type {
   CampaignMajorEventUpdatePayload,
   CampaignStateBundle,
+  CampaignStreamError,
+  CampaignTurnSendOptions,
+  CampaignTurnSendOutcome,
   CampaignWorldSettings,
-  CharacterChoiceSet,
   CreateNpcPartyPayload,
-  DiceMode,
   ItemEquipActionPayload,
   LiveStreamState,
   LocationContainer,
@@ -15,8 +16,6 @@ import type {
   LocationNode,
   LocationOverrideOptions,
   MemoryShard,
-  NarrativeMode,
-  PartyActionSpec,
   Phase3AgentProgressItem,
   Phase3TurnProgress,
   Phase4AgentProgressItem,
@@ -45,24 +44,47 @@ export function useCampaignTurnActions({
   const [phase4ProgressByTurn, setPhase4ProgressByTurn] = useState<
     Record<string, Phase4TurnProgress>
   >({});
-  const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamError, setStreamError] = useState<CampaignStreamError | null>(null);
   const [pendingLocationOverrideId, setPendingLocationOverrideId] = useState<
     string | null
   >(null);
   const [liveStream, setLiveStream] = useState<LiveStreamState | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const hasTurnSavedRef = useRef<boolean>(false);
 
-  const handleSendTurn = async (opts: {
-    userMessage: string;
-    parentTurnId?: string | null;
-    diceMode?: DiceMode;
-    manualDiceOverride?: number | null;
-    narrativeMode?: NarrativeMode;
-    narratorDirective?: string | null;
-    durationMinutes?: number | null;
-    characterChoices?: Record<string, CharacterChoiceSet>;
-    partyAction?: PartyActionSpec | null;
-  }) => {
-    if (!bundle) return;
+  const activeCampaignId = bundle?.campaign.id ?? null;
+
+  useEffect(() => {
+    return () => {
+      if (streamAbortRef.current && !hasTurnSavedRef.current) {
+        streamAbortRef.current.abort();
+      }
+      streamAbortRef.current = null;
+    };
+  }, [activeCampaignId]);
+
+  const stopTurnStream = useCallback(() => {
+    if (!streamAbortRef.current || hasTurnSavedRef.current) return;
+    streamAbortRef.current.abort();
+    streamAbortRef.current = null;
+  }, []);
+
+  const dismissStreamError = useCallback(() => {
+    setStreamError(null);
+  }, []);
+
+  const handleSendTurn = async (
+    opts: CampaignTurnSendOptions
+  ): Promise<CampaignTurnSendOutcome> => {
+    if (!bundle) return "completed";
+    if (streamAbortRef.current && !hasTurnSavedRef.current) {
+      streamAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+    hasTurnSavedRef.current = false;
+    let streamErrorOccurred = false;
+
     setIsStreaming(true);
     setStreamError(null);
     setPhase3Progress(null);
@@ -250,6 +272,7 @@ export function useCampaignTurnActions({
             );
           },
           onTurnSaved: (savedTurn) => {
+            hasTurnSavedRef.current = true;
             setPendingLocationOverrideId(null);
             setBundle((prev) => {
               if (!prev) return prev;
@@ -443,13 +466,44 @@ export function useCampaignTurnActions({
             setCampaignWorld(updatedWorld);
           },
           onError: (err) => {
-            setStreamError(err);
+            streamErrorOccurred = true;
+            const postSave = hasTurnSavedRef.current;
+            setStreamError({
+              kind: postSave ? "turn_post_save" : "turn_pre_save",
+              message: err,
+              retryable: !postSave,
+              failedTurnOpts: postSave ? null : opts,
+            });
           },
-        }
+        },
+        controller.signal
       );
+      if (controller.signal.aborted) {
+        return "aborted";
+      }
+      if (streamErrorOccurred) {
+        return hasTurnSavedRef.current ? "failed_post_save" : "failed_pre_save";
+      }
+      return "completed";
     } catch (err) {
-      setStreamError(String(err));
+      if (
+        controller.signal.aborted ||
+        (err instanceof Error && err.name === "AbortError")
+      ) {
+        return "aborted";
+      }
+      const postSave = hasTurnSavedRef.current;
+      setStreamError({
+        kind: postSave ? "turn_post_save" : "turn_pre_save",
+        message: err instanceof Error ? err.message : String(err),
+        retryable: !postSave,
+        failedTurnOpts: postSave ? null : opts,
+      });
+      return postSave ? "failed_post_save" : "failed_pre_save";
     } finally {
+      if (streamAbortRef.current === controller) {
+        streamAbortRef.current = null;
+      }
       setIsStreaming(false);
       setIsPhase4Running(false);
       setPhase3Progress(null);
@@ -484,7 +538,11 @@ export function useCampaignTurnActions({
       );
       setBundle(updated);
     } catch (err) {
-      setStreamError(err instanceof Error ? err.message : String(err));
+      setStreamError({
+        kind: "action",
+        message: err instanceof Error ? err.message : String(err),
+        retryable: false,
+      });
       throw err;
     }
   };
@@ -502,7 +560,11 @@ export function useCampaignTurnActions({
       );
       setBundle(updated);
     } catch (err) {
-      setStreamError(err instanceof Error ? err.message : String(err));
+      setStreamError({
+        kind: "action",
+        message: err instanceof Error ? err.message : String(err),
+        retryable: false,
+      });
       throw err;
     }
   };
@@ -518,7 +580,11 @@ export function useCampaignTurnActions({
       );
       setBundle(updated);
     } catch (err) {
-      setStreamError(err instanceof Error ? err.message : String(err));
+      setStreamError({
+        kind: "action",
+        message: err instanceof Error ? err.message : String(err),
+        retryable: false,
+      });
       throw err;
     }
   };
@@ -529,7 +595,11 @@ export function useCampaignTurnActions({
       const updated = await api.createNpcParty(bundle.campaign.id, payload);
       setBundle(updated);
     } catch (err) {
-      setStreamError(err instanceof Error ? err.message : String(err));
+      setStreamError({
+        kind: "action",
+        message: err instanceof Error ? err.message : String(err),
+        retryable: false,
+      });
       throw err;
     }
   };
@@ -540,7 +610,11 @@ export function useCampaignTurnActions({
       const updated = await api.disbandParty(bundle.campaign.id, partyId);
       setBundle(updated);
     } catch (err) {
-      setStreamError(err instanceof Error ? err.message : String(err));
+      setStreamError({
+        kind: "action",
+        message: err instanceof Error ? err.message : String(err),
+        retryable: false,
+      });
       throw err;
     }
   };
@@ -750,6 +824,8 @@ export function useCampaignTurnActions({
     phase4ProgressByTurn,
     streamError,
     setStreamError,
+    dismissStreamError,
+    stopTurnStream,
     pendingLocationOverrideId,
     setPendingLocationOverrideId,
     liveStream,

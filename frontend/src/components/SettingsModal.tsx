@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { Check, RefreshCw, Server, Settings, X } from "lucide-react";
 import { api } from "../api";
+import { useModalDialog } from "../hooks/useModalDialog";
 import { AppSettings, OllamaStatusResponse } from "../types";
 
 interface SettingsModalProps {
@@ -20,6 +21,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [probing, setProbing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    disableEscape: saving,
+    dialogRef,
+  });
 
   const probeOllama = async (urlToProbe?: string) => {
     setProbing(true);
@@ -71,9 +80,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel"
+      >
         <div className="modal-header">
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span id={titleId} style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Settings size={18} color="var(--accent-amber)" />
             Ollama & 3-Tier Memory Settings
           </span>

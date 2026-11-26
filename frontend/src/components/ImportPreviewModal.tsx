@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { useModalDialog } from "../hooks/useModalDialog";
 import {
   ImportCommitResponse,
   ImportConflictStrategy,
@@ -68,6 +69,14 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
     useState(false);
   const [commitResult, setCommitResult] =
     useState<ImportCommitResponse | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    disableEscape: inspecting || unlocking || committing,
+    dialogRef,
+  });
 
   // Auto-inspect if file provided
   useEffect(() => {
@@ -202,9 +211,18 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel" style={{ maxWidth: 680 }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel"
+        style={{ maxWidth: 680 }}
+      >
         <div className="modal-header">
           <span
+            id={titleId}
             style={{
               display: "flex",
               alignItems: "center",

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import {
   AlertTriangle,
   Brain,
@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../api";
+import { useModalDialog } from "../../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../../hooks/useOverlayBackHandler";
 import {
   CharacterBaseTab,
@@ -159,7 +160,7 @@ export const CharacterInspectorModal: React.FC<
   const [exportingChar, setExportingChar] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useOverlayBackHandler({
+  const { requestClose } = useOverlayBackHandler({
     id: "character-inspector",
     isOpen: true,
     isDirty: isDirty && !viewingHistory,
@@ -171,6 +172,15 @@ export const CharacterInspectorModal: React.FC<
       confirmLabel: "Discard",
       cancelLabel: "Stay",
     },
+  });
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose: requestClose,
+    disableEscape: saving,
+    dialogRef,
   });
 
   useEffect(() => {
@@ -189,16 +199,6 @@ export const CharacterInspectorModal: React.FC<
       setExportingChar(false);
     }
   };
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
 
   useEffect(() => {
     api.listCharacterVersions(characterId)
@@ -587,14 +587,19 @@ export const CharacterInspectorModal: React.FC<
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={requestClose}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="modal-panel modal-panel--sheet"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span id={titleId} style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Users size={18} color="var(--accent-amber)" />
               Character Sheet
             </span>
@@ -634,7 +639,7 @@ export const CharacterInspectorModal: React.FC<
               </div>
             )}
           </div>
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={requestClose} aria-label="Close modal">
             <X size={15} />
           </button>
         </div>
@@ -961,7 +966,7 @@ export const CharacterInspectorModal: React.FC<
               <Upload size={14} color="var(--accent-cyan)" />
               {exportingChar ? "Exporting..." : "Export (.zcc)"}
             </button>
-            <button type="button" className="btn" onClick={onClose}>
+            <button type="button" className="btn" onClick={requestClose}>
               {isDirty ? "Cancel" : "Close"}
             </button>
             {!viewingHistory && isDirty && (

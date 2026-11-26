@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Check,
   Clock,
@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { UserNote } from "../types";
+import { useModalDialog } from "../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import { rankNotes, slugifyTag } from "../utils/noteSearch";
 
@@ -455,7 +456,7 @@ export const NotesModal: React.FC<NotesModalProps> = ({
     selectedNoteId,
   ]);
 
-  useOverlayBackHandler({
+  const { requestClose } = useOverlayBackHandler({
     id: "notes-modal",
     isOpen,
     isDirty,
@@ -467,6 +468,15 @@ export const NotesModal: React.FC<NotesModalProps> = ({
       confirmLabel: "Discard",
       cancelLabel: "Stay",
     },
+  });
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen,
+    onClose: requestClose,
+    disableEscape: isSaving,
+    dialogRef,
   });
 
   // Synchronize selection
@@ -597,20 +607,28 @@ export const NotesModal: React.FC<NotesModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-backdrop">
-      <div className="notes-modal-dialog">
+    <div className="modal-backdrop" onClick={requestClose}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="notes-modal-dialog"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Modal Header */}
         <div className="notes-modal-header">
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <StickyNote size={20} color="var(--accent-amber)" />
-            <div style={{ fontWeight: 700, fontSize: "1.05rem", letterSpacing: "0.02em" }}>
+            <div id={titleId} style={{ fontWeight: 700, fontSize: "1.05rem", letterSpacing: "0.02em" }}>
               Notes & Player Scratchpad
             </div>
             <div className="notes-privacy-tag" title="Strictly private to your user account. Never sent to the LLM.">
               <Lock size={11} /> Private to you • Never seen by AI
             </div>
           </div>
-          <button type="button" className="btn btn-ghost" onClick={onClose} title="Close (Esc)">
+          <button type="button" className="btn btn-ghost" onClick={requestClose} aria-label="Close modal" title="Close (Esc)">
             <X size={16} />
           </button>
         </div>

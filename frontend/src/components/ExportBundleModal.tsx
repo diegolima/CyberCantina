@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckSquare,
@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { useModalDialog } from "../hooks/useModalDialog";
 import { CharacterRecord, PersonaRecord, WorldRecord } from "../types";
 import {
   collectExportableVideos,
@@ -72,6 +73,14 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose,
+    disableEscape: exporting,
+    dialogRef,
+  });
 
   // Filtered lists based on search queries
   const visibleChars = useMemo(
@@ -314,9 +323,17 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel" style={{ maxWidth: 740 }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel"
+        style={{ maxWidth: 740 }}
+      >
         <div className="modal-header">
-          <span style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--accent-cyan)" }}>
+          <span id={titleId} style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--accent-cyan)" }}>
             <Package size={18} />
             Export CyberCantina Package (.zcc)
           </span>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useId, useRef, useState } from "react";
 import {
   Brain,
   Check,
@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { useModalDialog } from "../hooks/useModalDialog";
 import { useOverlayBackHandler } from "../hooks/useOverlayBackHandler";
 import {
   CharacterRecord,
@@ -99,7 +100,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
         JSON.stringify(["paranoid", "razor-sharp", "dryly funny", "loyal"])
   );
 
-  useOverlayBackHandler({
+  const { requestClose } = useOverlayBackHandler({
     id: "character-wizard",
     isOpen: true,
     isDirty: isWizardDirty,
@@ -111,6 +112,15 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
       confirmLabel: "Discard",
       cancelLabel: "Stay",
     },
+  });
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDialog({
+    isOpen: true,
+    onClose: requestClose,
+    disableEscape: loading,
+    dialogRef,
   });
 
   const handleManualCreate = () => {
@@ -265,13 +275,20 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="modal-panel"
+      >
         <div className="modal-header">
-          <span style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--accent-amber)" }}>
+          <span id={titleId} style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--accent-amber)" }}>
             <UserPlus size={18} />
             1.1 Character Creation Wizard (Seed → Expand → Shard into RAG)
           </span>
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={requestClose} aria-label="Close modal">
             <X size={15} />
           </button>
         </div>
@@ -369,7 +386,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
               </div>
 
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
-                <button type="button" className="btn" onClick={onClose}>
+                <button type="button" className="btn" onClick={requestClose}>
                   Cancel
                 </button>
                 <button
