@@ -1183,19 +1183,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 aria-label="Director Choices"
                 className={`btn composer-action-btn ${
                   activeTray === "choices" ? "active" : ""
+                } ${
+                  totalStagedOptionsCount > 0 ? "composer-choices-btn--staged" : ""
                 }`}
                 disabled={presentCharacters.length === 0}
-                style={{
-                  borderColor:
-                    totalStagedOptionsCount > 0
-                      ? "rgba(59, 130, 246, 0.5)"
-                      : undefined,
-                  background:
-                    totalStagedOptionsCount > 0
-                      ? "rgba(59, 130, 246, 0.15)"
-                      : undefined,
-                  color: totalStagedOptionsCount > 0 ? "#93c5fd" : undefined,
-                }}
                 onClick={() => {
                   setActivePopover("none");
                   setActiveTray((prev) =>
@@ -1212,8 +1203,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   size={12}
                   color={
                     totalStagedOptionsCount > 0
-                      ? "#93c5fd"
-                      : "var(--accent-blue)"
+                      ? "var(--emerald-fg)"
+                      : "var(--accent-emerald)"
                   }
                 />
                 <span className="composer-action-label">Choices</span>

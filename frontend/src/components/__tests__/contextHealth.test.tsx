@@ -182,6 +182,10 @@ describe("ContextHealthPill & ContextHealthModal SSR rendering", () => {
         initialExpandedPhases={{ phase1_pre: true }}
       />,
     );
+    expect(warnHtml).toContain("modal-panel context-health-modal");
+    expect(warnHtml).not.toContain("modal-card");
+    expect(warnHtml).toContain("context-health-close-btn");
+    expect(warnHtml).toContain("context-health-settings-btn");
     expect(warnHtml).toContain("Phase 1 — Pre-Turn");
     expect(warnHtml).toContain("Phase 3 — Cognition");
     expect(warnHtml).toContain("Phase 4 — Prose");

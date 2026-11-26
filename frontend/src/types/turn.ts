@@ -359,7 +359,7 @@ export type SlashCommandIconKey =
   | "users"
   | "clock";
 
-export type SlashCommandAccent = "blue" | "amber" | "cyan" | "violet";
+export type SlashCommandAccent = "emerald" | "amber" | "cyan" | "violet";
 
 export interface ActiveSlashCommand {
   command: SlashCommandId;

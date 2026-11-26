@@ -260,7 +260,7 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="modal-card context-health-modal"
+        className="modal-panel context-health-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
@@ -284,7 +284,7 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
           </div>
           <button
             type="button"
-            className="btn btn-icon"
+            className="btn context-health-close-btn"
             onClick={onClose}
             aria-label="Close Context Health modal"
           >
@@ -404,7 +404,7 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
                       {onOpenSettings && (
                         <button
                           type="button"
-                          className="btn btn-sm"
+                          className="btn context-health-settings-btn"
                           onClick={() => {
                             onClose();
                             onOpenSettings();

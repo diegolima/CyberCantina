@@ -495,9 +495,9 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                             key={cid}
                             className="badge"
                             style={{
-                              background: "rgba(59, 130, 246, 0.12)",
-                              borderColor: "rgba(59, 130, 246, 0.35)",
-                              color: "#93c5fd",
+                              background: "var(--emerald-bg-subtle)",
+                              borderColor: "var(--emerald-border)",
+                              color: "var(--emerald-fg)",
                               fontSize: "0.71rem",
                               display: "inline-flex",
                               alignItems: "center",
@@ -890,8 +890,8 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                                 margin: "6px 12px 10px",
                                 padding: "8px 12px",
                                 borderRadius: 6,
-                                border: "1px solid rgba(59, 130, 246, 0.35)",
-                                background: "rgba(59, 130, 246, 0.08)",
+                                border: "1px solid var(--emerald-border)",
+                                background: "var(--emerald-bg-subtle)",
                                 fontSize: "0.75rem",
                                 display: "flex",
                                 flexDirection: "column",
@@ -913,7 +913,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                                     alignItems: "center",
                                     gap: 6,
                                     fontWeight: 600,
-                                    color: "#93c5fd",
+                                    color: "var(--emerald-fg)",
                                   }}
                                 >
                                   <ListChecks size={13} />
@@ -947,7 +947,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                                     color: "var(--text-primary)",
                                   }}
                                 >
-                                  <strong style={{ color: "#93c5fd" }}>
+                                  <strong style={{ color: "var(--emerald-fg)" }}>
                                     Selected Option:
                                   </strong>{" "}
                                   “{selectedChoice}”
@@ -1239,8 +1239,22 @@ export const TurnCard: React.FC<TurnCardProps> = ({
               <div className="turn-card-footer">
                 <div className="turn-card-footer-row">
                   <div className="turn-card-meta">
-                    <span>Turn #{turn.depth_index}</span>
-                    <span>• {turn.world_snapshot.world_timestamp}</span>
+                    <span className="turn-meta-pill">
+                      <span className="turn-meta-pill-turn">
+                        Turn #{turn.depth_index}
+                      </span>
+                      {turn.world_snapshot.world_timestamp && (
+                        <>
+                          <span
+                            className="turn-meta-pill-divider"
+                            aria-hidden="true"
+                          />
+                          <span className="turn-meta-pill-time">
+                            {turn.world_snapshot.world_timestamp}
+                          </span>
+                        </>
+                      )}
+                    </span>
                     <TurnProseModelPill
                       turn={turn}
                       isOpen={effectiveModelPopoverOpen}

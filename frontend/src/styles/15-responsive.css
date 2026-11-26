@@ -319,17 +319,28 @@
     min-height: 28px;
   }
 
+  .notes-flyout-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 15, 0.68);
+    backdrop-filter: blur(2px);
+    z-index: 44;
+    animation: fadeIn 0.15s ease-out;
+  }
+
   .studio-shell .notes-flyout-popover {
     left: 12px;
     right: 12px;
     bottom: 12px;
     width: auto;
     max-height: 75dvh;
+    animation: notesFlyoutSlideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   /* Full-Screen Campaign Modals on Mobile (Story, Context Health, Party) */
   .story-modal-panel,
-  .context-health-modal,
+  .modal-panel.context-health-modal,
   .party-modal-card {
     width: 100vw;
     max-width: 100vw;
@@ -664,7 +675,19 @@
     padding: 4px 8px;
   }
 
-  .composer-send-btn {
+  .btn-dice-toggle {
+    min-height: 32px;
+    padding: 4px 7px;
+  }
+
+  .field-input.composer-dice-override-input {
+    height: 32px;
+    padding: 2px 6px;
+  }
+
+  .composer-send-btn,
+  .btn.gm-send-btn,
+  .btn.gm-stop-btn {
     min-height: 32px;
     padding: 4px 10px;
   }
@@ -818,6 +841,8 @@
   .sidebar--overlay,
   .inspector--overlay,
   .drawer-backdrop,
+  .notes-flyout-backdrop,
+  .notes-flyout-popover,
   .turn-editing-banner-pill,
   .turn-model-popover,
   .turn-swipe-popover,

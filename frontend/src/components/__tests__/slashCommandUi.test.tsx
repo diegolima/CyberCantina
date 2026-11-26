@@ -153,6 +153,7 @@ describe("slash command UI rendering", () => {
     );
     expect(html).toContain("Slash Commands");
     expect(html).toContain("/choice");
+    expect(html).toContain("slash-picker-icon--emerald");
     expect(html).toContain("Requires someone present");
     expect(html).toContain('aria-disabled="true"');
     const choiceIdx = html.indexOf("/choice");
@@ -230,6 +231,14 @@ describe("slash command UI rendering", () => {
     expect(lookHtml).toContain("composer-slash-pill--cyan");
     expect(lookHtml).toContain("AI enhancement unavailable for slash commands");
     expect(lookHtml).not.toMatch(/class="btn btn-amber composer-send-btn"[^>]*disabled/);
+
+    // /choice inline pill renders emerald accent
+    const choicePillHtml = renderComposer({
+      activeSlash: { command: "choice", subcommand: null },
+      slashSyntaxHint: getActiveSlashHint({ command: "choice", subcommand: null }),
+      inputText: "Yulia: Agree | Refuse",
+    });
+    expect(choicePillHtml).toContain("composer-slash-pill--emerald");
   });
 
   it("renders /help above-composer tray with all commands alphabetically and composer reference", () => {

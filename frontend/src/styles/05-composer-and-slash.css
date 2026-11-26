@@ -30,8 +30,11 @@
 }
 
 .btn.composer-cancel-btn {
-  padding: 4px 12px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
   font-size: 0.78rem;
+  line-height: 1.2;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -265,11 +268,13 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 8px;
+  min-height: 28px;
+  padding: 4px 8px;
   font-size: 0.72rem;
   font-weight: 500;
+  line-height: 1.2;
   white-space: nowrap;
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   background: var(--surface-glass-1);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
@@ -289,6 +294,17 @@
   color: var(--accent-amber);
 }
 
+.composer-action-btn.composer-choices-btn--staged {
+  border-color: var(--emerald-border);
+  background: var(--emerald-bg);
+  color: var(--emerald-fg);
+}
+
+.composer-action-btn.composer-choices-btn--staged:hover:not(:disabled) {
+  background: var(--emerald-bg-hover);
+  border-color: var(--accent-emerald);
+}
+
 .composer-action-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -296,8 +312,8 @@
 
 .composer-count-badge {
   font-size: 0.63rem;
-  background: #3b82f6;
-  color: white;
+  background: var(--accent-emerald);
+  color: var(--bg-deep);
   padding: 0 4px;
   border-radius: 8px;
   font-weight: 700;
@@ -395,8 +411,11 @@
 }
 
 .composer-send-btn {
+  min-height: 28px;
   padding: 4px 14px;
+  border-radius: var(--radius-md);
   font-size: 0.78rem;
+  line-height: 1.2;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -623,10 +642,10 @@
   color: var(--cyan-fg);
 }
 
-.composer-slash-pill--blue {
-  background: rgba(59, 130, 246, 0.16);
-  border-color: rgba(59, 130, 246, 0.45);
-  color: #93c5fd;
+.composer-slash-pill--emerald {
+  background: var(--emerald-bg);
+  border-color: var(--emerald-border);
+  color: var(--emerald-fg);
 }
 
 .composer-slash-pill--amber {
@@ -751,9 +770,9 @@
   color: var(--cyan-fg);
 }
 
-.slash-picker-icon--blue {
-  background: rgba(59, 130, 246, 0.16);
-  color: #93c5fd;
+.slash-picker-icon--emerald {
+  background: var(--emerald-bg);
+  color: var(--emerald-fg);
 }
 
 .slash-picker-icon--amber {
@@ -1708,9 +1727,12 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 12px;
+  min-height: 28px;
+  padding: 4px 12px;
+  border-radius: var(--radius-md);
   font-size: 0.78rem;
   font-weight: 600;
+  line-height: 1.2;
   white-space: nowrap;
 }
 

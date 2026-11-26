@@ -49,6 +49,18 @@ export const NotesFlyout: React.FC<NotesFlyoutProps> = ({
   const [quickInput, setQuickInput] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen || typeof window === "undefined") return;
+    const isDesktopFinePointer =
+      window.innerWidth > 820 &&
+      (typeof window.matchMedia !== "function" ||
+        window.matchMedia("(pointer: fine)").matches);
+    if (isDesktopFinePointer) {
+      searchInputRef.current?.focus();
+    }
+  }, [isOpen]);
 
   // Close on Escape or click outside
   useEffect(() => {
@@ -120,7 +132,13 @@ export const NotesFlyout: React.FC<NotesFlyoutProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="notes-flyout-popover" ref={flyoutRef}>
+    <>
+      <div
+        className="notes-flyout-backdrop"
+        aria-hidden="true"
+        onClick={onClose}
+      />
+      <div className="notes-flyout-popover" ref={flyoutRef}>
       {/* Header */}
       <div className="notes-flyout-header">
         <div className="notes-flyout-title">
@@ -159,12 +177,12 @@ export const NotesFlyout: React.FC<NotesFlyoutProps> = ({
       <div className="ui-search-wrap ui-search-wrap--notes-flyout">
         <Search size={13} className="ui-search-icon" />
         <input
+          ref={searchInputRef}
           type="text"
           className="ui-search-input"
           placeholder="Search by tag (#combat) or keyword..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          autoFocus
         />
         {searchQuery && (
           <button
@@ -360,6 +378,7 @@ export const NotesFlyout: React.FC<NotesFlyoutProps> = ({
         </button>
       </div>
     </div>
+    </>
   );
 };
 

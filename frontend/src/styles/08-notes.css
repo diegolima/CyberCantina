@@ -42,6 +42,10 @@
 }
 
 /* Flyout Popover */
+.notes-flyout-backdrop {
+  display: none;
+}
+
 .notes-flyout-popover {
   position: fixed;
   left: 288px;
@@ -50,10 +54,10 @@
   height: 520px;
   max-height: calc(100vh - 28px);
   max-height: calc(100dvh - 28px);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-subtle);
+  background: var(--notes-bg-panel);
+  border: 1px solid var(--notes-border);
   border-radius: 10px;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(245, 158, 11, 0.15);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.72), 0 0 0 1px var(--amber-bg-subtle);
   z-index: 45;
   display: flex;
   flex-direction: column;
@@ -72,14 +76,29 @@
   }
 }
 
+@keyframes notesFlyoutSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .notes-flyout-header {
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--amber-border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--bg-deep);
+  background: var(--notes-bg-header);
   flex-shrink: 0;
+}
+
+.notes-flyout-popover .ui-search-input {
+  background: var(--notes-bg-header);
 }
 
 .notes-flyout-title {
@@ -150,7 +169,7 @@
 }
 
 .notes-flyout-card {
-  background: var(--bg-card);
+  background: var(--notes-bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 7px;
   padding: 8px 10px;
@@ -162,7 +181,7 @@
 }
 
 .notes-flyout-card:hover {
-  background: var(--bg-card-hover);
+  background: var(--notes-bg-card-hover);
   border-color: var(--amber-border);
 }
 
@@ -273,7 +292,7 @@
 .notes-quick-add-form {
   padding: 8px 12px;
   border-top: 1px solid var(--border-subtle);
-  background: var(--bg-deep);
+  background: var(--notes-bg-header);
   display: flex;
   gap: 6px;
   flex-shrink: 0;
@@ -281,7 +300,7 @@
 
 .notes-quick-add-input {
   flex: 1;
-  background: var(--bg-card);
+  background: var(--notes-bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 5px 9px;
@@ -297,7 +316,7 @@
 .notes-flyout-footer {
   padding: 6px 12px;
   border-top: 1px solid var(--border-subtle);
-  background: var(--bg-deep);
+  background: var(--notes-bg-header);
   display: flex;
   justify-content: center;
   flex-shrink: 0;

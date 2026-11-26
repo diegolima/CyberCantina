@@ -14,6 +14,7 @@ import { ChatStage } from "../ChatStage";
 import { ChatComposer, type ChatComposerProps } from "../chat/ChatComposer";
 import { DirectorChoicesDrawer } from "../chat/DirectorChoicesDrawer";
 import { GmTalkDrawer } from "../chat/GmTalkDrawer";
+import { NotesFlyout } from "../NotesDrawer";
 import { TurnCard } from "../chat/TurnCard";
 import {
   TurnSwipeSwitcher,
@@ -634,6 +635,11 @@ describe("v0.43.0 Mobile Campaign UX & Responsive Controls", () => {
     );
     expect(desktopStageHtml).toContain("stage-clock-date");
     expect(desktopStageHtml).toContain("UNIQUE_MOBILE_RECALL_TEXT");
+    expect(desktopStageHtml).toContain("turn-meta-pill");
+    expect(desktopStageHtml).toContain("turn-meta-pill-turn");
+    expect(desktopStageHtml).toContain("turn-meta-pill-divider");
+    expect(desktopStageHtml).toContain("turn-meta-pill-time");
+    expect(desktopStageHtml).not.toContain("• 2094-11-14 23:15");
 
     const mobileStageHtml = renderToStaticMarkup(
       <ChatStage
@@ -686,6 +692,30 @@ describe("v0.43.0 Mobile Campaign UX & Responsive Controls", () => {
     expect(composerHtml).toContain('aria-label="Narrator actions"');
     expect(composerHtml).toContain('aria-label="Exits (1)"');
     expect(composerHtml).toContain('aria-label="Director Choices"');
+    expect(composerHtml).toContain("var(--accent-emerald)");
+    expect(composerHtml).not.toContain("var(--accent-blue)");
+
+    const stagedComposerHtml = renderToStaticMarkup(
+      <ChatComposer {...makeComposerProps()} totalStagedOptionsCount={2} />
+    );
+    expect(stagedComposerHtml).toContain("composer-choices-btn--staged");
+    expect(stagedComposerHtml).toContain("var(--emerald-fg)");
+
+    const notesHtml = renderToStaticMarkup(
+      <NotesFlyout
+        isOpen={true}
+        notes={[]}
+        contextTags={[]}
+        onClose={vi.fn()}
+        onOpenModal={vi.fn()}
+        onToggleStar={vi.fn(async () => {})}
+        onQuickAdd={vi.fn(async () => {})}
+        onDeleteNote={vi.fn(async () => {})}
+      />
+    );
+    expect(notesHtml).toContain("notes-flyout-backdrop");
+    expect(notesHtml).toContain("notes-flyout-popover");
+    expect(notesHtml).not.toMatch(/autofocus/i);
 
     const choicesHtml = renderToStaticMarkup(
       <DirectorChoicesDrawer

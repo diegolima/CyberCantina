@@ -73,7 +73,7 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
                   display: "flex",
                   alignItems: "center",
                   gap: 6,
-                  color: "#93c5fd",
+                  color: "var(--emerald-fg)",
                   fontWeight: 600,
                   fontSize: "0.78rem",
                 }}
@@ -146,9 +146,11 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
                         style={{
                           fontSize: "0.64rem",
                           background: isSelected
-                            ? "#3b82f6"
-                            : "rgba(255,255,255,0.15)",
-                          color: "white",
+                            ? "var(--accent-emerald)"
+                            : "var(--surface-glass-4)",
+                          color: isSelected
+                            ? "var(--bg-deep)"
+                            : "var(--text-primary)",
                           padding: "0 5px",
                           borderRadius: 8,
                           fontWeight: 700,
@@ -202,12 +204,14 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
                       padding: "2px 7px",
                       fontSize: "0.70rem",
                       background: isSelected
-                        ? "rgba(59, 130, 246, 0.25)"
+                        ? "var(--emerald-bg-hover)"
                         : undefined,
                       borderColor: isSelected
-                        ? "rgba(59, 130, 246, 0.6)"
+                        ? "var(--accent-emerald)"
                         : undefined,
-                      color: isSelected ? "#93c5fd" : "var(--text-secondary)",
+                      color: isSelected
+                        ? "var(--emerald-fg)"
+                        : "var(--text-secondary)",
                     }}
                     onClick={() => handleSetDC(activeChoiceCharId, preset.val)}
                   >
@@ -336,9 +340,9 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
                           <span
                             className="choices-odds-badge"
                             style={{
-                              background: "rgba(59, 130, 246, 0.15)",
-                              border: "1px solid rgba(59, 130, 246, 0.4)",
-                              color: "#93c5fd",
+                              background: "var(--emerald-bg)",
+                              border: "1px solid var(--emerald-border)",
+                              color: "var(--emerald-fg)",
                             }}
                             title={`Estimated odds under current DC (${
                               stagedChoices[activeChoiceCharId]
@@ -434,7 +438,7 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
                       flexWrap: "wrap",
                     }}
                   >
-                    <Sparkles size={12} color="#93c5fd" />
+                    <Sparkles size={12} color="var(--emerald-fg)" />
                     <span>
                       Odds distribution for DC {choicePreview.difficulty_class} (
                       {diceMode} dice):

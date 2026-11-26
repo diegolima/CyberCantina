@@ -255,6 +255,44 @@
   min-width: 0;
 }
 
+.turn-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-glass-subtle);
+  background: var(--surface-glass-1);
+  color: var(--text-muted);
+  font-size: 0.69rem;
+  font-weight: 500;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  max-width: 100%;
+  cursor: default;
+}
+
+.turn-meta-pill-turn {
+  color: var(--text-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.turn-meta-pill-divider {
+  width: 1px;
+  height: 10px;
+  background: var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.turn-meta-pill-time {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .turn-card-actions {
   display: flex;
   gap: 6px;
@@ -858,7 +896,7 @@
 /* Director Choices Drawer & Badges */
 .choices-drawer-box {
   background: rgba(17, 24, 39, 0.95);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  border: 1px solid var(--emerald-border);
   border-radius: 8px;
   padding: 10px 14px;
   display: flex;
@@ -904,9 +942,9 @@
 }
 
 .choices-char-tab--active {
-  background: rgba(59, 130, 246, 0.18);
-  border-color: rgba(59, 130, 246, 0.6);
-  color: #93c5fd;
+  background: var(--emerald-bg);
+  border-color: var(--accent-emerald);
+  color: var(--emerald-fg);
   font-weight: 600;
 }
 
@@ -983,8 +1021,8 @@
 }
 
 .choices-preview-summary {
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.25);
+  background: var(--emerald-bg-subtle);
+  border: 1px solid var(--emerald-border);
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 0.72rem;
@@ -1254,10 +1292,12 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 8px;
+  min-height: 28px;
+  padding: 4px 8px;
   font-size: 0.74rem;
   font-weight: 600;
-  border-radius: 4px;
+  line-height: 1.2;
+  border-radius: var(--radius-md);
   text-transform: capitalize;
   user-select: none;
   cursor: pointer;
@@ -1301,7 +1341,9 @@
 
 .field-input.composer-dice-override-input {
   width: 54px;
-  padding: 3px 6px;
+  height: 28px;
+  padding: 2px 6px;
+  border-radius: var(--radius-md);
   font-size: 0.74rem;
 }
 
@@ -2017,11 +2059,32 @@
   }
 }
 
-.context-health-modal {
+.modal-panel.context-health-modal {
   width: min(800px, 94vw);
   max-height: 86vh;
   display: flex;
   flex-direction: column;
+  box-shadow: var(--shadow-modal);
+}
+
+.context-health-close-btn {
+  padding: 5px;
+  min-width: 30px;
+  min-height: 30px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.context-health-close-btn:hover:not(:disabled) {
+  background: var(--surface-glass-3);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.context-health-settings-btn {
+  padding: 5px 10px;
+  font-size: 0.76rem;
 }
 
 .context-health-tabs {
@@ -2088,7 +2151,7 @@
   flex-wrap: wrap;
 }
 
-.context-health-modal-body {
+.modal-body.context-health-modal-body {
   display: flex;
   flex-direction: column;
   gap: 14px;

@@ -119,7 +119,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = Object.freeze([
     name: "choice",
     aliases: Object.freeze(["choices"]),
     iconKey: "list_checks",
-    accent: "blue",
+    accent: "emerald",
     syntax: "/choice [Name] [(DC N)]: Opt 1 [@gate] | Opt 2",
     shortSyntax: "[Name] [(DC N)]: Opt 1 [@gate] | Opt 2",
     description: "Stage Director Choices to guide an active character's cognition",
