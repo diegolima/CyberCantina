@@ -31,8 +31,10 @@ import {
   useNavigationHistory,
 } from "./providers/NavigationHistoryContext";
 import { NavigationGuardModal } from "./components/shared/NavigationGuardModal";
+import { PwaUpdateBanner } from "./components/shared/PwaUpdateBanner";
 import { useCampaignTurnActions } from "./hooks/useCampaignTurnActions";
 import { useOverlayBackHandler } from "./hooks/useOverlayBackHandler";
+import { usePwaLifecycle } from "./hooks/usePwaLifecycle";
 import { useResponsiveCampaignLayout } from "./hooks/useResponsiveCampaignLayout";
 import { getShellClassNames } from "./utils/campaignLayout";
 import { slugifyTag } from "./utils/noteSearch";
@@ -56,6 +58,7 @@ import {
 
 const AppShell: React.FC = () => {
   const nav = useNavigationHistory();
+  const pwa = usePwaLifecycle();
   const [authChecking, setAuthChecking] = useState(true);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [routeNotice, setRouteNotice] = useState<string | null>(null);
@@ -854,17 +857,37 @@ const AppShell: React.FC = () => {
   }
 
   if (setupRequired) {
-    return <InitialSetupScreen onComplete={handleAuthenticated} />;
+    return (
+      <>
+        <InitialSetupScreen onComplete={handleAuthenticated} />
+        <PwaUpdateBanner
+          visible={pwa.needRefresh}
+          isStreaming={false}
+          isUpdating={pwa.isUpdating}
+          onReload={pwa.applyUpdate}
+          onDismiss={pwa.dismissUpdate}
+        />
+      </>
+    );
   }
 
   if (!currentUser) {
     return (
-      <AuthScreen
-        singleUserMode={singleUserMode}
-        allowSelfRegistration={allowSelfRegistration}
-        loginMessages={loginMessages}
-        onAuthenticated={handleAuthenticated}
-      />
+      <>
+        <AuthScreen
+          singleUserMode={singleUserMode}
+          allowSelfRegistration={allowSelfRegistration}
+          loginMessages={loginMessages}
+          onAuthenticated={handleAuthenticated}
+        />
+        <PwaUpdateBanner
+          visible={pwa.needRefresh}
+          isStreaming={false}
+          isUpdating={pwa.isUpdating}
+          onReload={pwa.applyUpdate}
+          onDismiss={pwa.dismissUpdate}
+        />
+      </>
     );
   }
 
@@ -1069,6 +1092,8 @@ const AppShell: React.FC = () => {
             setNotesModalInitialId(undefined);
             setShowNotesModal(true);
           }}
+          canInstallApp={pwa.canInstall}
+          onInstallApp={pwa.promptInstall}
           onLogout={handleLogout}
           onExportCampaign={(camp) => setExportingCampaign(camp)}
           onDeleteCampaign={(camp) => handleRequestDeleteCampaign(undefined, camp)}
@@ -1346,6 +1371,14 @@ const AppShell: React.FC = () => {
         prompt={nav.guardPrompt}
         onConfirm={nav.confirmGuard}
         onCancel={nav.cancelGuard}
+      />
+
+      <PwaUpdateBanner
+        visible={pwa.needRefresh}
+        isStreaming={isStreaming}
+        isUpdating={pwa.isUpdating}
+        onReload={pwa.applyUpdate}
+        onDismiss={pwa.dismissUpdate}
       />
     </div>
     </LocalRelayProvider>

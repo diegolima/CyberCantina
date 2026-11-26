@@ -872,6 +872,7 @@ erDiagram
 | `frontend/src/components/shared/MechanicsHelpButton.tsx` |
 | `frontend/src/components/shared/NavigationGuardModal.tsx` |
 | `frontend/src/components/shared/PhysicalStateControl.tsx` |
+| `frontend/src/components/shared/PwaUpdateBanner.tsx` |
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 | `frontend/src/components/shared/VideoUploadControls.tsx` |
 
@@ -923,6 +924,7 @@ erDiagram
 | `frontend/src/hooks/useGmTalk.ts` |
 | `frontend/src/hooks/useMagicWand.ts` |
 | `frontend/src/hooks/useOverlayBackHandler.ts` |
+| `frontend/src/hooks/usePwaLifecycle.ts` |
 | `frontend/src/hooks/useResponsiveCampaignLayout.ts` |
 
 #### `local`
@@ -969,6 +971,7 @@ erDiagram
 | `frontend/src/types/physical.ts` |
 | `frontend/src/types/prompts.ts` |
 | `frontend/src/types/providers.ts` |
+| `frontend/src/types/pwa.ts` |
 | `frontend/src/types/telemetry.ts` |
 | `frontend/src/types/turn.ts` |
 | `frontend/src/types/world.ts` |
@@ -992,6 +995,13 @@ erDiagram
 | `frontend/src/utils/partyCommand.ts` |
 | `frontend/src/utils/partyHelpers.ts` |
 | `frontend/src/utils/profilePreferences.ts` |
+| `frontend/src/utils/pwa.ts` |
 | `frontend/src/utils/slashCommands.ts` |
 | `frontend/src/utils/spatialDistance.ts` |
 | `frontend/src/utils/unsupportedFields.ts` |
+
+#### `vite-env.d`
+
+| File |
+| :--- |
+| `frontend/src/vite-env.d.ts` |

@@ -835,6 +835,13 @@
     width: auto;
     max-width: none;
   }
+
+  .pwa-update-banner {
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    max-width: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -859,6 +866,7 @@
   .gm-slideout-panel--closing,
   .gm-talk-streaming-dot,
   .ui-pill--fade,
+  .pwa-update-banner,
   .change-dot,
   .stage-clock-colon--blinking,
   .stage-clock-cluster--flash,

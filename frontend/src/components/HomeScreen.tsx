@@ -75,6 +75,8 @@ export interface HomeScreenProps {
   onDeleteWorld?: (world: WorldRecord) => void;
   onDeletePersona?: (persona: PersonaRecord) => void;
   onRefreshData?: () => void;
+  canInstallApp?: boolean;
+  onInstallApp?: () => void;
   onOpenCharacterWizardWithDraft?: (
     draft: any,
     autoWorld?: any,
@@ -249,6 +251,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onDeleteWorld,
   onDeletePersona,
   onRefreshData,
+  canInstallApp = false,
+  onInstallApp,
   onOpenCharacterWizardWithDraft,
 }) => {
   const relay = useOptionalLocalRelay();
@@ -378,6 +382,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </div>
 
         <div className="home-nav-actions">
+          {canInstallApp && onInstallApp && (
+            <button
+              type="button"
+              className="home-nav-btn"
+              onClick={onInstallApp}
+              title="Install CyberCantina as a standalone app"
+            >
+              <Download size={14} color="var(--accent-cyan)" />
+              <span>Install App</span>
+            </button>
+          )}
+
           {/* Notes button */}
           <button
             type="button"

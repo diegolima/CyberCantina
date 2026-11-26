@@ -35,6 +35,7 @@ flowchart TD
     b_19["providers"]
     b_20["types"]
     b_21["utils"]
+    b_22["vite-env.d"]
     b_0 --> b_1
     b_0 --> b_2
     b_0 --> b_9
@@ -150,13 +151,14 @@ flowchart TD
 | `components/party` | 1 | `components/shared`, `types`, `utils` |
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
-| `components/shared` | 8 | `hooks`, `types`, `utils` |
+| `components/shared` | 9 | `hooks`, `types`, `utils` |
 | `components/story` | 5 | `components (root)`, `components/shared`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `hooks`, `types` |
 | `components/world` | 17 | `api`, `components (root)`, `components/character`, `components/chat`, `components/map`, `components/shared`, `hooks`, `types`, `utils` |
-| `hooks` | 6 | `api`, `providers`, `types`, `utils` |
+| `hooks` | 7 | `api`, `providers`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 2 | `api`, `local`, `types`, `utils` |
-| `types` | 18 | *(leaf)* |
-| `utils` | 18 | `types` |
+| `types` | 19 | *(leaf)* |
+| `utils` | 19 | `types` |
+| `vite-env.d` | 1 | *(leaf)* |
