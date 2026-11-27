@@ -1,12 +1,84 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { BookOpen, ChevronDown, ChevronRight, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import {
   LOCATION_LORE_CATEGORIES,
   LocationLoreCategory,
   LocationLoreNodeDraft,
   LoreNode,
+  MagicContextRef,
+  WorldPromptContext,
 } from "../../types";
+import { useMagicWand } from "../../hooks/useMagicWand";
+import { MagicWandButton } from "../MagicWandButton";
 import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
+
+interface LoreContentFieldProps {
+  value: string;
+  onChange: (nextValue: string) => void;
+  disabled: boolean;
+  rows?: number;
+  placeholder?: string;
+  contextRef: MagicContextRef;
+  contextKey: string;
+  showWand: boolean;
+}
+
+const LoreContentField: React.FC<LoreContentFieldProps> = ({
+  value,
+  onChange,
+  disabled,
+  rows = 2,
+  placeholder = "Lore details...",
+  contextRef,
+  contextKey,
+  showWand,
+}) => {
+  const wand = useMagicWand({
+    fieldRole: "lore_content",
+    value,
+    onChange,
+    contextRef,
+    contextKey,
+    disabled: disabled || !showWand,
+    singleLine: false,
+    maxWords: 80,
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+        }}
+      >
+        <label style={{ fontSize: "0.68rem", color: "var(--text-secondary)", margin: 0 }}>
+          Lore Details
+        </label>
+        {showWand && (
+          <MagicWandButton
+            wand={wand}
+            isInputEmpty={!value.trim()}
+            isSlashCommand={false}
+            variant="compact"
+            compactLabel="Draft Lore"
+            iconAccent="amber"
+          />
+        )}
+      </div>
+      <textarea
+        className="field-textarea"
+        rows={rows}
+        placeholder={placeholder}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+};
 
 export interface MapLoreSectionProps {
   mode: "editor" | "campaign";
@@ -21,6 +93,12 @@ export interface MapLoreSectionProps {
   savedInDb: boolean;
   unlockLore?: boolean;
   revealedLoreIds?: readonly string[];
+  worldContext?: WorldPromptContext;
+  entityKind?: "location" | "container";
+  parentContainerName?: string | null;
+  targetSummary?: string | null;
+  targetDescription?: string | null;
+  targetTags?: readonly string[];
   onDraftUpdate?: (nextLore: LoreNode[]) => void;
   onCampaignSave?: (
     id: string,
@@ -54,6 +132,12 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
   savedInDb,
   unlockLore = false,
   revealedLoreIds = [],
+  worldContext,
+  entityKind,
+  parentContainerName,
+  targetSummary,
+  targetDescription,
+  targetTags,
   onDraftUpdate,
   onCampaignSave,
   onToggleLoreReveal,
@@ -82,6 +166,40 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
   const [campLorePendingTagDraft, setCampLorePendingTagDraft] = useState("");
   const [campLoreError, setCampLoreError] = useState<string | null>(null);
   const [isSavingCampLore, setIsSavingCampLore] = useState(false);
+
+  const resolvedEntityKind: "location" | "container" =
+    entityKind ?? (scopeLabel.toLowerCase().includes("container") || scopeLabel.toLowerCase().includes("area") ? "container" : "location");
+
+  const baseLoreContext = useMemo<
+    Extract<MagicContextRef, { scope: "world_location" }>
+  >(
+    () => ({
+      scope: "world_location",
+      entity_kind: resolvedEntityKind,
+      world_id: worldContext?.worldId || worldId || null,
+      location_id: resolvedEntityKind === "location" ? targetId : null,
+      world_name: worldContext?.worldName || null,
+      genre: worldContext?.genre || null,
+      tone: worldContext?.tone || null,
+      setting_overview: worldContext?.settingOverview || null,
+      parent_container_name: parentContainerName ?? null,
+      location_name: targetName || null,
+      location_summary: targetSummary ?? null,
+      location_description: targetDescription ?? null,
+      existing_tags: targetTags ? [...targetTags] : null,
+    }),
+    [
+      resolvedEntityKind,
+      worldContext,
+      worldId,
+      targetId,
+      parentContainerName,
+      targetName,
+      targetSummary,
+      targetDescription,
+      targetTags,
+    ]
+  );
 
   useEffect(() => {
     setCampLoreFormMode(null);
@@ -323,13 +441,22 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
                 </option>
               ))}
             </select>
-            <textarea
-              className="field-textarea"
+            <LoreContentField
+              value={campLoreContent}
+              onChange={setCampLoreContent}
+              disabled={isSavingCampLore || isMutatingLocked}
               rows={2}
               placeholder="Lore details..."
-              value={campLoreContent}
-              disabled={isSavingCampLore || isMutatingLocked}
-              onChange={(e) => setCampLoreContent(e.target.value)}
+              showWand={canEditCampaignLore && !isMutatingLocked}
+              contextKey={`camp-lore:${targetId}:${
+                campLoreFormMode.mode === "edit" ? campLoreFormMode.index : "add"
+              }`}
+              contextRef={{
+                ...baseLoreContext,
+                lore_title: campLoreTitle.trim() || null,
+                lore_category: campLoreCategory,
+                lore_tags: campLoreTags,
+              }}
             />
             <TagChipsInput
               value={campLoreTags}
@@ -447,12 +574,22 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
                           </option>
                         ))}
                       </select>
-                      <textarea
-                        className="field-textarea"
+                      <LoreContentField
+                        value={ln.content}
+                        onChange={(nextVal) =>
+                          updateDraftLoreAt(idx, { content: nextVal })
+                        }
+                        disabled={isMutatingLocked}
                         rows={2}
                         placeholder="Lore details..."
-                        value={ln.content}
-                        onChange={(e) => updateDraftLoreAt(idx, { content: e.target.value })}
+                        showWand={canEditDraftLore && !isMutatingLocked}
+                        contextKey={`draft-lore:${targetId}:${ln.id}`}
+                        contextRef={{
+                          ...baseLoreContext,
+                          lore_title: ln.title.trim() || null,
+                          lore_category: ln.category,
+                          lore_tags: ln.entity_tags,
+                        }}
                       />
                       <TagChipsInput
                         value={ln.entity_tags}

@@ -515,3 +515,81 @@
   gap: 6px;
   flex-shrink: 0;
 }
+
+/* ==========================================================================
+   Split Action Button (.ui-split-btn*)
+   ========================================================================== */
+.ui-split-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+.ui-split-btn__main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.ui-split-btn__toggle {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 4px 7px;
+  min-width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+}
+
+.ui-split-btn__menu {
+  position: absolute;
+  z-index: 80;
+  min-width: 152px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  box-shadow: var(--shadow-popover);
+}
+
+.ui-split-btn__menu--down {
+  top: calc(100% + 4px);
+}
+
+.ui-split-btn__menu--up {
+  bottom: calc(100% + 4px);
+}
+
+.ui-split-btn__menu--right {
+  right: 0;
+}
+
+.ui-split-btn__menu--left {
+  left: 0;
+}
+
+.ui-split-btn__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ui-split-btn__item:hover,
+.ui-split-btn__item:focus-visible {
+  background: var(--surface-glass-3);
+  color: var(--accent-cyan);
+  outline: none;
+}

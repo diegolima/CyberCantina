@@ -391,9 +391,18 @@ export interface ActiveSlashCommand {
   subcommand: PartySubcommandId | null;
 }
 
+export interface WorldPromptContext {
+  worldId?: string;
+  worldName?: string;
+  genre?: string;
+  tone?: string;
+  settingOverview?: string;
+}
+
 export type EnrichFieldRole =
   | "player_turn_prompt"
   | "narrator_directive"
+  | "location_summary"
   | "location_description"
   | "location_tags"
   | "character_persona"
@@ -422,6 +431,10 @@ export type MagicContextRef =
       location_description?: string | null;
       existing_tags?: string[] | null;
       child_names?: string[] | null;
+      parent_container_name?: string | null;
+      lore_title?: string | null;
+      lore_category?: string | null;
+      lore_tags?: string[] | null;
     }
   | {
       scope: "character_field";

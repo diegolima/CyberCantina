@@ -153,7 +153,7 @@ flowchart TD
 | `components/party` | 1 | `components/shared`, `hooks`, `types`, `utils` |
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
-| `components/shared` | 10 | `hooks`, `types`, `utils` |
+| `components/shared` | 11 | `hooks`, `types`, `utils` |
 | `components/story` | 5 | `components (root)`, `components/shared`, `hooks`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `hooks`, `types` |
 | `components/world` | 17 | `api`, `components (root)`, `components/character`, `components/chat`, `components/map`, `components/shared`, `hooks`, `types`, `utils` |

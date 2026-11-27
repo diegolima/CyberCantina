@@ -888,6 +888,7 @@ erDiagram
 | `frontend/src/components/shared/PhysicalStateControl.tsx` |
 | `frontend/src/components/shared/PwaUpdateBanner.tsx` |
 | `frontend/src/components/shared/ServerUnreachableScreen.tsx` |
+| `frontend/src/components/shared/SplitSaveButton.tsx` |
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 | `frontend/src/components/shared/VideoUploadControls.tsx` |
 

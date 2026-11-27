@@ -34,6 +34,7 @@ import type {
   PhysicalStateOverridePayload,
   TurnNodeRecord,
   WorldLoreCategory,
+  WorldPromptContext,
 } from "../../types";
 import { isEditableKeyboardTarget } from "../map/mapGeometry";
 import { ImageLightboxModal } from "../shared/ImageLightboxModal";
@@ -116,6 +117,7 @@ interface WorldCodexTabProps {
   visitedContainerIds?: string[];
   activeLocationId?: string;
   activeWorldName?: string;
+  worldContext?: WorldPromptContext;
   activePersona?: PersonaRecord | null;
   activePersonaTurnState?: PersonaTurnStateSnapshot | null;
   campaignCharacters?: CodexCampaignCharacterEntry[];
@@ -182,6 +184,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   visitedContainerIds = [],
   activeLocationId,
   activeWorldName,
+  worldContext,
   activePersona,
   activePersonaTurnState,
   campaignCharacters = [],
@@ -1237,6 +1240,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             lore={lore}
             pendingTagDraft={pendingWorldLoreTagDrafts[lore.id] || ""}
             isCampaignMode={!canEditWorldLore}
+            worldId={worldId}
+            worldContext={worldContext}
             titleInputRef={titleInputRef}
             reclassifiedNotice={
               reclassifiedNotice?.loreId === lore.id ? reclassifiedNotice : null
@@ -1275,6 +1280,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             unlockLore={unlockLore}
             revealedLoreIds={revealedLoreIds}
             isMutatingLocked={isMutatingLocked}
+            worldContext={worldContext}
             onSaveCampaignLocationLore={onSaveCampaignLocationLore}
             onSaveCampaignContainerLore={onSaveCampaignContainerLore}
             onToggleLoreReveal={onToggleLoreReveal}
@@ -1298,6 +1304,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             unlockLore={unlockLore}
             revealedLoreIds={revealedLoreIds}
             isMutatingLocked={isMutatingLocked}
+            worldContext={worldContext}
             onSaveCampaignLocationLore={onSaveCampaignLocationLore}
             onSaveCampaignContainerLore={onSaveCampaignContainerLore}
             onToggleLoreReveal={onToggleLoreReveal}
@@ -1384,10 +1391,12 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       }
 
       return (
-        <CodexLoreEditor
+          <CodexLoreEditor
           lore={selectedLore}
           pendingTagDraft={pendingWorldLoreTagDrafts[selectedLore.id] || ""}
           isCampaignMode={!canEditWorldLore}
+          worldId={worldId}
+          worldContext={worldContext}
           titleInputRef={titleInputRef}
           reclassifiedNotice={
             reclassifiedNotice?.loreId === selectedLore.id

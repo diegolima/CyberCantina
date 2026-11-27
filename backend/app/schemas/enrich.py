@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 EnrichFieldRole = Literal[
     "player_turn_prompt",
     "narrator_directive",
+    "location_summary",
     "location_description",
     "location_tags",
     "character_persona",
@@ -39,6 +40,10 @@ class WorldLocationEnrichContextRef(BaseModel):
     location_description: str | None = None
     existing_tags: list[str] | None = None
     child_names: list[str] | None = None
+    parent_container_name: str | None = None
+    lore_title: str | None = None
+    lore_category: str | None = None
+    lore_tags: list[str] | None = None
 
 
 class CharacterFieldEnrichContextRef(BaseModel):

@@ -1293,9 +1293,11 @@ const AppShell: React.FC = () => {
             setCampaignWorldSheetTab(null);
             setCodexFocusRequest(null);
           }}
-          onSaved={() => {
-            setCampaignWorldSheetTab(null);
-            setCodexFocusRequest(null);
+          onSaved={(_updatedWorld, closeModal = true) => {
+            if (closeModal) {
+              setCampaignWorldSheetTab(null);
+              setCodexFocusRequest(null);
+            }
           }}
         />
       )}

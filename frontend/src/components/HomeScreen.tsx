@@ -375,9 +375,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     >
       {/* Top Hub Navigation Bar */}
       <header className="home-navbar">
-        <div className="home-nav-brand">
-          <Flame size={20} color="var(--accent-amber)" />
-          <span>CYBERCANTINA</span>
+        <div className="home-nav-brand" aria-label="CyberCantina">
+          <Flame size={20} color="var(--accent-amber)" style={{ flexShrink: 0 }} />
+          <span className="home-nav-brand-text">CYBERCANTINA</span>
         </div>
 
         <div className="home-nav-actions">
@@ -387,9 +387,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               className="home-nav-btn"
               onClick={onInstallApp}
               title="Install CyberCantina as a standalone app"
+              aria-label="Install App"
             >
               <Download size={14} color="var(--accent-cyan)" />
-              <span>Install App</span>
+              <span className="home-nav-btn-label">Install App</span>
             </button>
           )}
 
@@ -399,9 +400,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             className="home-nav-btn"
             onClick={onOpenNotes}
             title="Open Notes Manager"
+            aria-label={
+              notesCount !== undefined && notesCount > 0
+                ? `Open Notes Manager (${notesCount})`
+                : "Open Notes Manager"
+            }
           >
             <StickyNote size={14} color="var(--accent-amber)" />
-            <span>Notes</span>
+            <span className="home-nav-btn-label">Notes</span>
             {notesCount !== undefined && notesCount > 0 && (
               <span className="home-nav-badge">{notesCount}</span>
             )}
@@ -414,9 +420,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               className="home-nav-btn"
               onClick={onOpenAdmin}
               title="Open Admin Area"
+              aria-label="Open Admin Area"
             >
               <UserCog size={14} color="var(--accent-amber)" />
-              <span>Admin Area</span>
+              <span className="home-nav-btn-label">Admin Area</span>
             </button>
           )}
 
@@ -428,18 +435,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               onClick={onOpenProfile}
               title="Open Profile, Password & Passkeys"
             >
-              <User size={14} color="var(--accent-cyan)" />
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span
-                  style={{
-                    fontWeight: 600,
-                    fontSize: "0.8rem",
-                    color: "var(--text-primary)",
-                  }}
-                >
+              <User size={14} color="var(--accent-cyan)" style={{ flexShrink: 0 }} />
+              <div className="home-nav-profile-meta">
+                <span className="home-nav-profile-name">
                   {currentUser.display_name || currentUser.username}
                 </span>
-                <span className={`ui-pill ui-pill--xs ui-pill--upper role-${currentUser.role}`}>
+                <span
+                  className={`ui-pill ui-pill--xs ui-pill--upper role-${currentUser.role} home-nav-profile-role`}
+                >
                   {currentUser.role}
                 </span>
               </div>
@@ -450,10 +453,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           {currentUser && !singleUserMode && (
             <button
               type="button"
-              className="home-nav-btn"
-              style={{ padding: "5px 9px" }}
+              className="home-nav-btn home-nav-btn--icon"
               onClick={onLogout}
               title="Sign out"
+              aria-label="Sign out"
             >
               <LogOut size={13} />
             </button>

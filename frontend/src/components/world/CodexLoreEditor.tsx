@@ -1,6 +1,13 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { AlertCircle, Copy, Info, RotateCcw, Sparkles, Trash2 } from "lucide-react";
-import type { LoreNode, WorldLoreCategory } from "../../types";
+import type {
+  LoreNode,
+  MagicContextRef,
+  WorldLoreCategory,
+  WorldPromptContext,
+} from "../../types";
+import { useMagicWand } from "../../hooks/useMagicWand";
+import { MagicWandButton } from "../MagicWandButton";
 import { TagChipsInput } from "../TagChipsInput";
 import {
   CODEX_SECTIONS,
@@ -13,6 +20,8 @@ interface CodexLoreEditorProps {
   lore: LoreNode;
   pendingTagDraft: string;
   isCampaignMode: boolean;
+  worldId?: string;
+  worldContext?: WorldPromptContext;
   titleInputRef?: React.RefObject<HTMLInputElement>;
   reclassifiedNotice?: {
     fromSectionLabel: string;
@@ -37,6 +46,8 @@ export const CodexLoreEditor: React.FC<CodexLoreEditorProps> = ({
   lore,
   pendingTagDraft,
   isCampaignMode,
+  worldId,
+  worldContext,
   titleInputRef,
   reclassifiedNotice,
   artifactUnlinkNotice,
@@ -55,6 +66,35 @@ export const CodexLoreEditor: React.FC<CodexLoreEditorProps> = ({
   const validation = getWorldLoreValidationErrors(lore, pendingTagDraft);
   const activeSectionId = getCodexSectionForCategory(lore.category);
   const editableSections = CODEX_SECTIONS.filter((s) => !s.isSpecial);
+
+  const loreContextRef = useMemo<MagicContextRef>(
+    () => ({
+      scope: "world_location",
+      entity_kind: "location",
+      world_id: worldContext?.worldId || worldId || lore.world_id || null,
+      location_id: null,
+      world_name: worldContext?.worldName || null,
+      genre: worldContext?.genre || null,
+      tone: worldContext?.tone || null,
+      setting_overview: worldContext?.settingOverview || null,
+      location_name: null,
+      lore_title: lore.title.trim() || null,
+      lore_category: lore.category,
+      lore_tags: lore.entity_tags,
+    }),
+    [worldContext, worldId, lore.world_id, lore.title, lore.category, lore.entity_tags]
+  );
+
+  const contentWand = useMagicWand({
+    fieldRole: "lore_content",
+    value: lore.content,
+    onChange: onChangeContent,
+    contextRef: loreContextRef,
+    contextKey: `codex-lore:${lore.id}`,
+    disabled: isCampaignMode,
+    singleLine: false,
+    maxWords: 80,
+  });
 
   if (isCampaignMode) {
     return (
@@ -214,9 +254,22 @@ export const CodexLoreEditor: React.FC<CodexLoreEditorProps> = ({
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            gap: 8,
           }}
         >
-          <label htmlFor={`codex-content-${lore.id}`}>Lore Content</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <label htmlFor={`codex-content-${lore.id}`} style={{ margin: 0 }}>
+              Lore Content
+            </label>
+            <MagicWandButton
+              wand={contentWand}
+              isInputEmpty={!lore.content.trim()}
+              isSlashCommand={false}
+              variant="compact"
+              compactLabel="Draft Lore"
+              iconAccent="amber"
+            />
+          </div>
           <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
             {lore.content.length} / 2000
           </span>

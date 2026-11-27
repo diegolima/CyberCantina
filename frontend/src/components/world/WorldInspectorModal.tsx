@@ -59,6 +59,7 @@ import {
 } from "../map/mapValidation";
 import { ClickToEditField } from "../shared/ClickToEditField";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
+import { SplitSaveButton } from "../shared/SplitSaveButton";
 import { UnsupportedFieldsTab } from "../shared/UnsupportedFieldsTab";
 import {
   type CodexCampaignCharacterEntry,
@@ -302,6 +303,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [activeWorldId, setActiveWorldId] = useState(world.id);
   const [media, setMedia] = useState<WorldMediaItem[]>(() => [...(world.media ?? [])]);
   const [isDirty, setIsDirty] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exportingWorld, setExportingWorld] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
@@ -551,6 +553,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
 
   const markDirty = () => {
     if (!isDirty) setIsDirty(true);
+    if (justSaved) setJustSaved(false);
   };
 
   const reachabilityReport = computeUnreachableLocationIds(locations, edges);
@@ -583,7 +586,68 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     0
   );
 
-  const handleSave = async () => {
+  const syncStateFromSavedWorld = (updated: WorldRecord) => {
+    setActiveWorldId(updated.id);
+    setName(updated.name);
+    setGlobalRules({
+      describe_on_first_visit: true,
+      auto_spawn_props_on_search_crit: false,
+      ...updated.global_rules,
+    });
+    setContainers(
+      (updated.containers ?? []).map((cont) => ({
+        ...cont,
+        environmental_tags: [...(cont.environmental_tags ?? [])],
+        lore_nodes: (cont.lore_nodes ?? []).map((ln) => ({
+          ...ln,
+          entity_tags: [...(ln.entity_tags ?? [])],
+        })),
+      }))
+    );
+    setLocations(
+      updated.locations
+        .filter((loc) => !loc.created_at_turn_id)
+        .map((loc) => ({
+          ...loc,
+          environmental_tags: [...loc.environmental_tags],
+          lore_nodes: (loc.lore_nodes ?? []).map((ln) => ({
+            ...ln,
+            entity_tags: [...(ln.entity_tags ?? [])],
+          })),
+          props: (loc.props ?? []).map((prop) => ({
+            ...prop,
+            flags: [...(prop.flags ?? [])],
+          })),
+        }))
+    );
+    setEdges(
+      updated.edges
+        .filter((edge) => !edge.created_at_turn_id)
+        .map((edge) => ({ ...edge }))
+    );
+    setLoreNodes(
+      updated.lore_nodes.map((lore) => ({
+        ...lore,
+        category: WORLD_LORE_CATEGORIES.includes(
+          lore.category as WorldLoreCategory
+        )
+          ? (lore.category as WorldLoreCategory)
+          : "faction",
+        entity_tags: [...lore.entity_tags],
+      }))
+    );
+    setMedia([...(updated.media ?? [])]);
+    setPendingWorldLoreTagDrafts({});
+    setStagedUnsupportedDeletes(new Set());
+    setIsDirty(false);
+    setJustSaved(true);
+  };
+
+  const handleSave = async (options?: {
+    closeAfter?: boolean;
+  }): Promise<boolean> => {
+    const closeAfter =
+      options?.closeAfter ?? (mode === "wizard");
     if (isCampaignMode) {
       let flushedCampaignLore: WorldLoreNodeDraft[] | null = null;
       if (campaignUnlockLore && campaignWorldLoreDirty && onSaveCampaignWorldLore) {
@@ -620,7 +684,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             setError(
               `Codex entry #${i + 1} ("${item.title || "Untitled"}") requires a title, content, and at least 1 trigger keyword.`
             );
-            return;
+            return false;
           }
         }
         flushedCampaignLore = flushed;
@@ -642,18 +706,20 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           setPendingWorldLoreTagDrafts({});
         }
         setIsDirty(false);
-        onSaved(world);
+        setJustSaved(true);
+        onSaved(world, closeAfter);
+        return true;
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+        return false;
       } finally {
         setSaving(false);
       }
-      return;
     }
 
     if (locations.length === 0) {
       setError("At least one location is required.");
-      return;
+      return false;
     }
 
     const flushedWorldLore: LoreNode[] = loreNodes.map((lore) => {
@@ -687,14 +753,14 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           loreId: item.id,
           nonce: ++focusNonceRef.current,
         });
-        setError(
-          `Codex entry #${i + 1} ("${
-            item.title || "Untitled"
-          }") must have a non-empty title, content, and at least 1 trigger keyword.`
-        );
-        return;
-      }
-    }
+            setError(
+              `Codex entry #${i + 1} ("${
+                item.title || "Untitled"
+              }") must have a non-empty title, content, and at least 1 trigger keyword.`
+            );
+            return false;
+          }
+        }
 
     const sanitizedLocations: LocationNode[] = locations.map((loc) => ({
       ...loc,
@@ -727,7 +793,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               ln.title || "Untitled"
             }") must have a non-empty title, content, and at least 1 trigger keyword.`
           );
-          return;
+          return false;
         }
       }
       for (let i = 0; i < (loc.props ?? []).length; i++) {
@@ -737,7 +803,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           setError(
             `Location "${loc.name}" Prop #${i + 1} must have a non-empty item name.`
           );
-          return;
+          return false;
         }
       }
     }
@@ -770,7 +836,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     if (containerErrors.length > 0) {
       setActiveTab("map");
       setError(containerErrors[0]);
-      return;
+      return false;
     }
 
     const saveReach = computeUnreachableLocationIds(sanitizedLocations, edges);
@@ -780,7 +846,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
         saveReach.starterError ||
           `${saveReach.unreachableIds.length} unlinked location(s) must be bidirectionally connected to the Starting Location before saving.`
       );
-      return;
+      return false;
     }
 
     setLoreNodes(flushedWorldLore);
@@ -810,16 +876,23 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               ...payload,
               unsupported_fields: remainingUnsupported,
             });
-      setStagedUnsupportedDeletes(new Set());
+      if (mode === "wizard") {
+        setStagedUnsupportedDeletes(new Set());
+        onSaved(updated, true);
+        return true;
+      }
+      syncStateFromSavedWorld(updated);
       if (
         activeTab === "unsupported" &&
         Object.keys(updated.unsupported_fields ?? {}).length === 0
       ) {
         setActiveTab("base");
       }
-      onSaved(updated);
+      onSaved(updated, closeAfter);
+      return true;
     } catch (err) {
       setError(String(err));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -1194,7 +1267,19 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 }}
                 hasUnsavedChanges={isDirty}
                 isSavingMap={saving}
-                onSaveMap={isCampaignMode ? onSaveCampaignMap : handleSave}
+                onSaveMap={
+                  isCampaignMode
+                    ? onSaveCampaignMap
+                    : mode === "wizard"
+                    ? undefined
+                    : () => handleSave({ closeAfter: false })
+                }
+                onSaveAndCloseMap={
+                  isCampaignMode || mode === "wizard"
+                    ? undefined
+                    : () => handleSave({ closeAfter: true })
+                }
+                onRequestClose={isCampaignMode ? requestClose : undefined}
                 onChangeGraph={
                   isCampaignMode
                     ? undefined
@@ -1239,6 +1324,13 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             visitedContainerIds={visitedContainerIds}
             activeLocationId={activeLocationId}
             activeWorldName={name}
+            worldContext={{
+              worldId: activeWorldId,
+              worldName: name,
+              genre: globalRules.genre,
+              tone: globalRules.tone,
+              settingOverview: globalRules.setting_overview,
+            }}
             activePersona={activePersona}
             activePersonaTurnState={activePersonaTurnState}
             campaignCharacters={campaignCharacters}
@@ -1664,7 +1756,9 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   type="button"
                   className="btn btn-cyan"
                   disabled={saving || locations.length === 0 || mapHasBlockingErrors}
-                  onClick={handleSave}
+                  onClick={() => {
+                    void handleSave({ closeAfter: true });
+                  }}
                 >
                   <Check size={15} />
                   {saving ? "Saving..." : "Commit World & Spatial Graph"}
@@ -1677,13 +1771,17 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}
               >
                 {isCampaignMode
-                  ? isDirty
+                  ? effectiveIsDirty
                     ? "Unsaved campaign setting change ready. Applies from future turns only."
+                    : justSaved
+                    ? "Changes saved."
                     : "Adjust World Settings to customize this campaign independently."
                   : mapHasBlockingErrors
                   ? "Resolve unlinked locations or hierarchy errors on the Map tab before saving."
                   : isDirty
                   ? "Unsaved edits ready. Saving preserves existing campaigns via silent versioning."
+                  : justSaved
+                  ? "Changes saved."
                   : "Click any field above to edit."}
               </div>
               <div style={{ display: "flex", gap: 10 }}>
@@ -1701,22 +1799,28 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   </button>
                 )}
                 <button type="button" className="btn" onClick={requestClose}>
-                  {isDirty ? "Cancel" : "Close"}
+                  {effectiveIsDirty ? "Cancel" : "Close"}
                 </button>
-                {isDirty && (
-                  <button
-                    type="button"
-                    className="btn btn-amber"
+                {effectiveIsDirty && (
+                  <SplitSaveButton
+                    variantClass="btn-amber"
                     disabled={
                       saving ||
                       (!isCampaignMode && mapHasBlockingErrors) ||
                       (isCampaignMode && isMutatingLocked)
                     }
-                    onClick={handleSave}
-                  >
-                    <Check size={14} />
-                    {saving ? "Saving..." : "Save Changes"}
-                  </button>
+                    menuDirection="up"
+                    menuAlign="right"
+                    testId="world-modal-save-btn"
+                    onSave={() => handleSave({ closeAfter: false })}
+                    onSaveAndClose={() => handleSave({ closeAfter: true })}
+                    label={
+                      <>
+                        <Check size={14} />
+                        {saving ? "Saving..." : "Save Changes"}
+                      </>
+                    }
+                  />
                 )}
               </div>
             </>

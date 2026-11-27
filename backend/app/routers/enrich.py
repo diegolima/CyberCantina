@@ -29,7 +29,7 @@ class LocationTagsEnrichOutput(BaseModel):
 
     tags: list[str] = Field(
         default_factory=list,
-        description="3 to 6 concise, evocative sensory/environmental tags for this location.",
+        description="3 to 6 concise, evocative sensory/environmental tags (1-3 words each) for this location.",
     )
 
 
@@ -60,6 +60,33 @@ def _sanitize_enriched_prose(text: str) -> str:
     return cleaned.strip()
 
 
+def _sanitize_spatial_text(text: str, single_paragraph: bool = True) -> str:
+    """Sanitize enriched text, stripping accidental outer quotes and collapsing line breaks."""
+    cleaned = _sanitize_enriched_prose(text)
+    if len(cleaned) >= 2 and (
+        (cleaned[0] == '"' and cleaned[-1] == '"')
+        or (cleaned[0] == "'" and cleaned[-1] == "'")
+    ):
+        cleaned = cleaned[1:-1].strip()
+    if single_paragraph:
+        cleaned = " ".join(line.strip() for line in cleaned.splitlines() if line.strip())
+    return cleaned.strip()
+
+
+def _trim_recent_prose(prose: str | None, max_chars: int = 600) -> str:
+    """Return a clean word-bounded tail of recent prose for turn context."""
+    stripped = (prose or "").strip()
+    if not stripped:
+        return "None"
+    if len(stripped) <= max_chars:
+        return stripped
+    tail = stripped[-max_chars:]
+    ws_idx = tail.find(" ")
+    if 0 < ws_idx < 80:
+        tail = tail[ws_idx + 1 :]
+    return f"...{tail.lstrip()}"
+
+
 @router.post("", response_model=PromptEnrichResponse)
 async def enrich_text(
     req: PromptEnrichRequest,
@@ -76,6 +103,10 @@ async def enrich_text(
 
     context_summary_lines: list[str] = []
     role_instruction = ""
+    user_draft_task_prefix = "Enhance the following text according to the context and instructions."
+    user_empty_task_prefix = "Draft a compelling starting draft from scratch based on the following context."
+    user_context_heading = "CONTEXT"
+    user_draft_heading = "USER DRAFT"
 
     if req.context_ref.scope == "campaign_turn":
         try:
@@ -107,47 +138,101 @@ async def enrich_text(
             active_loc = repo.get_location(
                 leaf_turn.world_snapshot.active_location_id, campaign_id=campaign.id
             )
+            target_loc_id = active_loc.id
 
-        try:
-            interlocutor = repo.get_character(
-                campaign.character_id,
-                campaign_id=campaign.id,
-                valid_turn_ids=valid_turn_ids,
+        # Resolve co-present NPCs actually at target_loc_id rather than hardcoding campaign.character_id
+        if leaf_turn.character_states:
+            present_char_ids = [
+                cid
+                for cid, st in leaf_turn.character_states.items()
+                if st.current_location_id == target_loc_id
+            ]
+        else:
+            present_char_ids = [campaign.character_id] if campaign.character_id else []
+
+        present_npcs: list[tuple[str, str]] = []
+        for cid in present_char_ids:
+            try:
+                char_rec = repo.get_character(
+                    cid,
+                    campaign_id=campaign.id,
+                    valid_turn_ids=valid_turn_ids,
+                )
+                present_npcs.append((char_rec.name, char_rec.tagline))
+            except KeyError:
+                continue
+
+        present_npc_desc = (
+            "; ".join(f"{n} ({t})" if t else n for n, t in present_npcs)
+            if present_npcs
+            else "None (the player is alone at this location)"
+        )
+        present_npc_names = ", ".join(n for n, _t in present_npcs)
+
+        persona_line = ""
+        if campaign.persona_snapshot is not None:
+            p_tag = (
+                f" ({campaign.persona_snapshot.tagline})"
+                if campaign.persona_snapshot.tagline
+                else ""
             )
-            npc_name = interlocutor.name
-            npc_tagline = interlocutor.tagline
-        except KeyError:
-            npc_name = "the character"
-            npc_tagline = ""
+            persona_line = f"Player character: {campaign.persona_snapshot.name}{p_tag}"
 
         context_summary_lines = [
             f"World Setting: {world.name} (Genre: {world.global_rules.genre}, Tone: {world.global_rules.tone})",
             f"Current Location: {active_loc.name} — {active_loc.summary}",
             f"Sensory markers: {', '.join(active_loc.environmental_tags) if active_loc.environmental_tags else 'none'}",
-            f"Present NPC interlocutor: {npc_name} ({npc_tagline})",
-            f"Recent story context: {leaf_turn.raw_prose[-300:] if leaf_turn.raw_prose else 'None'}",
         ]
+        if persona_line:
+            context_summary_lines.append(persona_line)
+        context_summary_lines.extend(
+            [
+                f"Present NPCs here: {present_npc_desc}",
+                f"Recent story context: {_trim_recent_prose(leaf_turn.raw_prose, 600)}",
+            ]
+        )
 
         if req.field_role == "player_turn_prompt":
+            if present_npcs:
+                target_clause = f"directed toward {present_npc_names}"
+                npc_rule = (
+                    f"- NEVER write dialogue, actions, or thoughts for {present_npc_names}, "
+                    "and NEVER invent characters who are not present."
+                )
+            else:
+                target_clause = f"while alone in {active_loc.name}"
+                npc_rule = (
+                    "- The player is alone here; focus strictly on their physical action, "
+                    "observation, or quiet aside without inventing NPCs or spoken replies."
+                )
+
+            if is_empty:
+                length_rule = "- Draft 1-3 concise sentences (20-55 words max) proposing an immediate grounded action and/or line of speech."
+            else:
+                length_rule = (
+                    f"- Keep length within 15-{req.max_words} words. Preserve the player's exact intent, "
+                    "actions, and spoken meaning without inventing unrequested actions, items, or outcomes."
+                )
+
             role_instruction = (
-                f"You are a creative writing assistant helping a HUMAN PLAYER formulate their action or spoken dialogue "
-                f"directed toward {npc_name}.\n"
-                f"STRICT PERSPECTIVE RULES:\n"
-                f"- Write SOLELY from the human player's point of view.\n"
-                f"- Put physical actions in *italics* and spoken dialogue in \"quotes\".\n"
-                f"- NEVER write dialogue or thoughts for {npc_name}.\n"
-                f"- NEVER decide how {npc_name} reacts or responds.\n"
-                f"- Keep the length between 15 and {req.max_words} words."
+                f"You are a creative writing assistant helping a HUMAN PLAYER formulate their action or spoken dialogue {target_clause}.\n"
+                "STRICT PERSPECTIVE RULES:\n"
+                "- Write SOLELY from the human player's point of view.\n"
+                '- Put physical actions in *italics* and spoken dialogue in "quotes".\n'
+                f"{npc_rule}\n"
+                f"{length_rule}"
             )
+            user_empty_task_prefix = "Draft a concise, grounded player turn prompt based on the scene context."
         elif req.field_role == "narrator_directive":
             role_instruction = (
-                f"You are crafting an objective, detached directive for the neutral scene narrator.\n"
-                f"Focus on sensory details, environmental shifts, or ambient sounds in {active_loc.name}.\n"
-                f"Do NOT tell the protagonist how to feel or act."
+                f"You are crafting an objective, detached directive (1-3 sentences, {req.max_words} words max) "
+                f"for the neutral scene narrator in {active_loc.name}.\n"
+                "Focus strictly on concrete sensory details, environmental shifts, or ambient sounds.\n"
+                "Do NOT prescribe how the protagonist feels, thinks, or acts."
             )
         else:
             role_instruction = (
-                f"Refine the {req.field_role} to fit {world.global_rules.genre} and {world.global_rules.tone}."
+                f"Refine the {req.field_role} to fit {world.global_rules.genre} and {world.global_rules.tone} ({req.max_words} words max)."
             )
 
     elif req.context_ref.scope == "world_location":
@@ -220,46 +305,94 @@ async def enrich_text(
         context_summary_lines = [
             f"World: {world_name} ({genre} — {tone})",
             f"Setting overview: {setting_overview or 'None provided'}",
-            f"{target_label}: {loc_name}",
         ]
+        if ref.parent_container_name and ref.parent_container_name.strip():
+            context_summary_lines.append(
+                f"Parent area / landmark: {ref.parent_container_name.strip()}"
+            )
+        if req.field_role != "lore_content" or ref.location_id or ref.location_name:
+            context_summary_lines.append(f"{target_label}: {loc_name}")
         if is_container and ref.child_names:
             child_list = [c.strip() for c in ref.child_names if c.strip()][:10]
             if child_list:
                 context_summary_lines.append(
                     f"Interior locations within this landmark: {', '.join(child_list)}"
                 )
-        if loc_summary:
+        if loc_summary and req.field_role != "location_summary":
             context_summary_lines.append(f"Location summary: {loc_summary}")
         if loc_description and req.field_role != "location_description":
             context_summary_lines.append(f"Location description: {loc_description}")
-        if existing_tags:
+        if existing_tags and not (req.field_role == "location_tags" and raw_text):
             context_summary_lines.append(f"Existing environmental tags: {', '.join(existing_tags)}")
 
         if req.field_role == "lore_content":
+            if ref.lore_title and ref.lore_title.strip():
+                context_summary_lines.append(f"Lore title: {ref.lore_title.strip()}")
+            if ref.lore_category and ref.lore_category.strip():
+                context_summary_lines.append(f"Lore category: {ref.lore_category.strip()}")
+            if ref.lore_tags:
+                clean_lore_tags = [t.strip() for t in ref.lore_tags if t.strip()][:8]
+                if clean_lore_tags:
+                    context_summary_lines.append(
+                        f"Trigger keywords: {', '.join(clean_lore_tags)}"
+                    )
             scope_target = (
-                f"specific location '{loc_name}'" if ref.location_id or ref.location_name else f"macro world '{world_name}'"
+                f"specific location '{loc_name}'"
+                if ref.location_id or ref.location_name
+                else f"macro world '{world_name}'"
             )
             role_instruction = (
-                f"Write a concise, evocative lore entry ({req.max_words} words max) for the {scope_target}, "
-                f"grounded in the world's genre ({genre}) and tone ({tone})."
+                f"Write a concise, concrete in-universe lore entry of 2-4 sentences ({req.max_words} words max) "
+                f"for {scope_target}, grounded in {genre} ({tone}). "
+                "Establish concrete facts, origins, or local significance in an encyclopedic/diegetic voice without "
+                "meta-commentary, markdown headers, or bullet lists."
             )
+            user_context_heading = "LORE CONTEXT"
+            user_draft_heading = "CURRENT LORE DRAFT"
+            user_empty_task_prefix = "Draft a 2-4 sentence in-universe lore entry from the context below."
+            user_draft_task_prefix = "Tighten and enrich this lore entry into 2-4 concrete, atmospheric sentences preserving its established facts."
         elif req.field_role == "location_tags":
             entity_noun = "landmark/building container" if is_container else "location"
             role_instruction = (
-                f"Extract and generate 3 to 6 concise, evocative sensory and environmental keyword tags "
-                f"(2-4 words max per tag, such as 'Flickering Neon', 'Damp Cobblestones', 'Ozone Hum') "
-                f"for {entity_noun} '{loc_name}', grounded in {genre} / {tone}."
+                f"Extract and generate 3 to 6 concise sensory and environmental keyword tags "
+                f"(1-3 words per tag covering lighting, sound, air/scent, surface/material, or mood) "
+                f"for {entity_noun} '{loc_name}', grounded in {genre} / {tone}. Avoid full sentences."
             )
+        elif req.field_role == "location_summary":
+            role_instruction = (
+                f"Write a single concise sentence ({req.max_words} words max, ideally 8-18 words) summarizing "
+                f"'{loc_name}' as an adjacent-exit preview grounded in {genre} ({tone}). "
+                "Focus on one concrete visual or sensory hook in present tense, plain text only—no characters, "
+                "spoken dialogue, or second-person ('you') phrasing."
+            )
+            user_context_heading = "LOCATION DETAILS"
+            user_draft_heading = "CURRENT SUMMARY"
+            user_empty_task_prefix = "Draft a 1-sentence adjacent-exit preview hook from the location details below."
+            user_draft_task_prefix = "Tighten this location summary into a single concise, concrete exit-preview sentence."
         elif is_container:
             role_instruction = (
-                f"Write an atmospheric, sensory exterior and overall ambience description ({req.max_words} words max) "
-                f"for landmark/building container '{loc_name}', grounded in the world's genre ({genre}) and tone ({tone})."
+                f"Write a concrete, ambient exterior and threshold description in 2-3 sentences ({req.max_words} words max, single paragraph) "
+                f"for landmark/building container '{loc_name}', grounded in {genre} ({tone}). "
+                "Describe only its permanent physical exterior, architecture, lighting, and overall atmosphere in present tense "
+                "(use interior room names only as subtle context—do not list them). "
+                "Do NOT include characters, spoken dialogue, transient events, or second-person ('you') instructions."
             )
+            user_context_heading = "LOCATION DETAILS"
+            user_draft_heading = "CURRENT DESCRIPTION"
+            user_empty_task_prefix = "Draft a 2-3 sentence static spatial reference description from the location details below."
+            user_draft_task_prefix = "Tighten and ground the following location description into 2-3 concrete, ambient sentences preserving its core physical details."
         else:
             role_instruction = (
-                f"Write an atmospheric, sensory location description ({req.max_words} words max) "
-                f"for '{loc_name}', grounded in the world's genre ({genre}) and tone ({tone})."
+                f"Write a concrete, ambient physical description in 2-3 sentences ({req.max_words} words max, single paragraph) "
+                f"for '{loc_name}', grounded in {genre} ({tone}). "
+                "Describe only permanent physical structure, lighting, materials, and ambient sensory atmosphere "
+                "(sight, sound, scent) in present tense. "
+                "Do NOT include characters, spoken dialogue, transient plot events, or second-person ('you') instructions."
             )
+            user_context_heading = "LOCATION DETAILS"
+            user_draft_heading = "CURRENT DESCRIPTION"
+            user_empty_task_prefix = "Draft a 2-3 sentence static spatial reference description from the location details below."
+            user_draft_task_prefix = "Tighten and ground the following location description into 2-3 concrete, ambient sentences preserving its core physical details."
 
     elif req.context_ref.scope == "character_field":
         try:
@@ -274,25 +407,32 @@ async def enrich_text(
             f"Persona: {char.core_persona}",
         ]
         role_instruction = (
-            f"Enhance the character's {req.field_role} into evocative, consistent prose ({req.max_words} words max)."
+            f"Enhance the character's {req.field_role} into concise, consistent prose ({req.max_words} words max), "
+            "preserving established facts and character voice."
         )
 
-    # Instruction modifiers
-    instruction_guidance = ""
+    # Instruction modifiers (always provide explicit guidance even on default "auto")
     if req.instruction == "polish":
-        instruction_guidance = "Polish grammar and vocabulary, preserving the exact tone and intent."
+        instruction_guidance = "Polish grammar and word choice while preserving the exact tone, meaning, and length."
     elif req.instruction == "expand":
-        instruction_guidance = "Add vivid sensory textures and descriptive detail."
+        instruction_guidance = "Add concrete sensory texture without exceeding the sentence/word limits."
     elif req.instruction == "concise":
-        instruction_guidance = "Make the text punchy, concise, and direct."
+        instruction_guidance = "Make the text punchy, concrete, and direct while keeping essential details."
+    else:
+        instruction_guidance = (
+            "Refine clarity, grounding, and style while preserving the core facts and intent and respecting the target length."
+        )
 
     if req.field_role == "location_tags":
         user_prompt = (
-            "Generate evocative environmental and sensory keyword tags for this location.\n\n"
+            "Generate 3-6 concise environmental and sensory keyword tags for this location.\n\n"
             "=== CONTEXT ===\n" + "\n".join(context_summary_lines)
         )
         if raw_text:
-            user_prompt += f"\n\n=== EXISTING TAGS ===\n{raw_text}\nRefine and expand these tags into 3-6 distinct sensory markers."
+            user_prompt += (
+                f"\n\n=== EXISTING TAGS ===\n{raw_text}\n"
+                "Refine and round out these tags into 3-6 distinct, concise sensory markers (1-3 words each)."
+            )
         messages = [
             {"role": "system", "content": role_instruction},
             {"role": "user", "content": user_prompt},
@@ -302,18 +442,23 @@ async def enrich_text(
                 messages=messages,
                 schema_cls=LocationTagsEnrichOutput,
                 profile=eff_actor,
-                temperature=0.6,
-                max_tokens=200,
+                temperature=0.55,
+                max_tokens=260,
                 required_properties=list(LocationTagsEnrichOutput.model_fields.keys()),
             )
             deduped: list[str] = []
             seen_lower: set[str] = set()
             for raw_tag in structured.tags:
                 clean_tag = _sanitize_enriched_prose(raw_tag).strip(",;•-* ")
-                if clean_tag and clean_tag.lower() not in seen_lower:
+                if (
+                    clean_tag
+                    and len(clean_tag) <= 48
+                    and len(clean_tag.split()) <= 5
+                    and clean_tag.lower() not in seen_lower
+                ):
                     seen_lower.add(clean_tag.lower())
                     deduped.append(clean_tag)
-            cleaned_tags = ", ".join(deduped[:8])
+            cleaned_tags = ", ".join(deduped[:6])
             return PromptEnrichResponse(
                 enriched_text=cleaned_tags,
                 mode_applied="generated" if is_empty else "enriched",
@@ -328,17 +473,17 @@ async def enrich_text(
 
     if is_empty:
         user_prompt = (
-            "Draft a compelling starting draft from scratch based on the following scene context.\n\n"
-            "=== CONTEXT ===\n" + "\n".join(context_summary_lines) + "\n\n"
-            "Output ONLY the final text without commentary, markdown headers, or quotation wrappers."
+            f"{user_empty_task_prefix}\n\n"
+            f"=== {user_context_heading} ===\n" + "\n".join(context_summary_lines) + "\n\n"
+            "Output ONLY the final text without preamble, explanations, markdown headers, or outer quotation marks."
         )
     else:
         user_prompt = (
-            "Enhance the following text according to the context and instructions.\n\n"
-            "=== CONTEXT ===\n" + "\n".join(context_summary_lines) + "\n\n"
-            f"=== USER DRAFT ===\n{raw_text}\n\n"
+            f"{user_draft_task_prefix}\n\n"
+            f"=== {user_context_heading} ===\n" + "\n".join(context_summary_lines) + "\n\n"
+            f"=== {user_draft_heading} ===\n{raw_text}\n\n"
             f"{instruction_guidance}\n"
-            "Output ONLY the enhanced text without preamble, explanations, or meta-commentary."
+            "Output ONLY the enhanced text without preamble, explanations, markdown headers, or meta-commentary."
         )
 
     messages = [
@@ -346,16 +491,25 @@ async def enrich_text(
         {"role": "user", "content": user_prompt},
     ]
 
+    temperature = (
+        0.55
+        if req.field_role in ("location_description", "location_summary", "lore_content")
+        else 0.65
+    )
+    # Floor max_tokens at 320 so reasoning/thinking models emitting <think> blocks never truncate empty
+    max_tokens = min(max(req.max_words * 4, 320), 600)
+
     try:
         enriched_text = await llm_client.complete_text(
             messages=messages,
             profile=eff_actor,
-            temperature=0.7,
-            max_tokens=min(req.max_words * 4, 300),
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
-        cleaned = _sanitize_enriched_prose(enriched_text)
-        if req.single_line:
-            cleaned = " ".join(cleaned.splitlines()).strip()
+        if req.field_role in ("location_description", "location_summary") or req.single_line:
+            cleaned = _sanitize_spatial_text(enriched_text, single_paragraph=True)
+        else:
+            cleaned = _sanitize_enriched_prose(enriched_text)
         return PromptEnrichResponse(
             enriched_text=cleaned,
             mode_applied="generated" if is_empty else "enriched",

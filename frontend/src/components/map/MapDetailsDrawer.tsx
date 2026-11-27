@@ -64,14 +64,9 @@ import type {
   ProjectedGhostExternalNode,
 } from "./topologyProjection";
 import type { EdgePairPatch } from "./useTopologyMutations";
+import type { WorldPromptContext } from "../../types";
 
-export interface WorldPromptContext {
-  worldId?: string;
-  worldName?: string;
-  genre?: string;
-  tone?: string;
-  settingOverview?: string;
-}
+export type { WorldPromptContext };
 
 export interface ContainerSupernodeStats {
   descendantLocationCount: number;
@@ -1096,6 +1091,14 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
       .filter((n) => n.trim().length > 0);
   }, [selectedContainer, allLocations]);
 
+  const parentContainerName = useMemo(() => {
+    const parentId = selectedContainer
+      ? selectedContainer.parent_container_id
+      : selectedLocation?.container_id;
+    if (!parentId) return null;
+    return containers.find((c) => c.id === parentId)?.name?.trim() || null;
+  }, [selectedContainer, selectedLocation, containers]);
+
   const activeMagicEntityKey = selectedContainer
     ? `cont:${selectedContainer.id}`
     : selectedLocation
@@ -1119,6 +1122,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         genre: worldContext?.genre || null,
         tone: worldContext?.tone || null,
         setting_overview: worldContext?.settingOverview || null,
+        parent_container_name: parentContainerName,
         location_name: selectedContainer.name || null,
         location_summary: null,
         location_description: selectedContainer.description || null,
@@ -1136,12 +1140,34 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
       genre: worldContext?.genre || null,
       tone: worldContext?.tone || null,
       setting_overview: worldContext?.settingOverview || null,
+      parent_container_name: parentContainerName,
       location_name: loc?.name || null,
       location_summary: loc?.summary || null,
       location_description: loc?.description || null,
       existing_tags: loc?.environmental_tags ?? [],
     };
-  }, [selectedContainer, selectedContainerChildNames, selectedLocation, worldContext]);
+  }, [
+    selectedContainer,
+    selectedContainerChildNames,
+    selectedLocation,
+    worldContext,
+    parentContainerName,
+  ]);
+
+  const summaryWand = useMagicWand({
+    fieldRole: "location_summary",
+    value: selectedLocation?.summary ?? "",
+    onChange: (nextText) => {
+      if (selectedLocIdRef.current) {
+        onPatchLocation(selectedLocIdRef.current, { summary: nextText });
+      }
+    },
+    contextRef: locationContextRef,
+    contextKey: `summary:${activeMagicEntityKey}`,
+    disabled: Boolean(selectedContainer) || !selectedLocation || isLocNarrativeLocked,
+    singleLine: true,
+    maxWords: 20,
+  });
 
   const descriptionWand = useMagicWand({
     fieldRole: "location_description",
@@ -1159,7 +1185,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
     contextKey: `desc:${activeMagicEntityKey}`,
     disabled: isMagicWandDisabled,
     singleLine: false,
-    maxWords: 120,
+    maxWords: 55,
   });
 
   const activeEntityTags = selectedContainer
@@ -1793,6 +1819,11 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             unlockLore={unlockLore}
             revealedLoreIds={revealedLoreIds}
             onToggleLoreReveal={onToggleLoreReveal}
+            worldContext={worldContext}
+            entityKind="container"
+            parentContainerName={parentContainerName}
+            targetDescription={selectedContainer.description}
+            targetTags={selectedContainer.environmental_tags ?? []}
           />
         ) : (
           <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic" }}>
@@ -2192,9 +2223,28 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         )}
       </div>
 
-      {/* Summary */}
+      {/* Summary + Compact Magic Wand */}
       <div className="field-group" style={{ gap: 4 }}>
-        <label style={{ fontSize: "0.72rem" }}>1-Sentence Exit Hook / Summary</label>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 6,
+          }}
+        >
+          <label style={{ fontSize: "0.72rem", margin: 0 }}>
+            1-Sentence Exit Hook / Summary
+          </label>
+          <MagicWandButton
+            wand={summaryWand}
+            isInputEmpty={!(selectedLocation.summary || "").trim()}
+            isSlashCommand={false}
+            variant="compact"
+            compactLabel="Draft Summary"
+            iconAccent="amber"
+          />
+        </div>
         <input
           className="field-input"
           disabled={isLocNarrativeLocked}
@@ -2429,6 +2479,12 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         unlockLore={unlockLore}
         revealedLoreIds={revealedLoreIds}
         onToggleLoreReveal={onToggleLoreReveal}
+        worldContext={worldContext}
+        entityKind="location"
+        parentContainerName={parentContainerName}
+        targetSummary={selectedLocation.summary}
+        targetDescription={selectedLocation.description}
+        targetTags={selectedLocation.environmental_tags ?? []}
       />
 
       {/* Touch-Accessible Location Actions (parity with right-click / Delete key) */}

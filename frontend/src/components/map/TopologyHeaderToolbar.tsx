@@ -16,6 +16,7 @@ import {
   type MapSearchMatch,
   filterAndRankMapSearchResults,
 } from "./mapSearch";
+import { SplitSaveButton } from "../shared/SplitSaveButton";
 
 export interface TopologyHeaderToolbarProps {
   title?: string;
@@ -29,7 +30,8 @@ export interface TopologyHeaderToolbarProps {
   effectiveSaving: boolean;
   isMutatingLocked: boolean;
   validationSummary: string | null;
-  handleSaveClick: () => void;
+  handleSaveClick: () => Promise<boolean> | void;
+  handleSaveAndCloseClick?: () => Promise<void> | void;
   onClose?: () => void;
   handleCloseClick: () => void;
   currentContainerId: string | null;
@@ -59,6 +61,7 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
   isMutatingLocked,
   validationSummary,
   handleSaveClick,
+  handleSaveAndCloseClick,
   onClose,
   handleCloseClick,
   currentContainerId,
@@ -408,11 +411,11 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
           )}
 
           {hasSaveMap && (!isMobileViewport || !isMutatingLocked) && (
-            <button
-              type="button"
-              className={`btn map-toolbar-action-btn ${
+            <SplitSaveButton
+              variantClass={
                 effectiveDirty && !hasBlockingErrors ? "btn-amber" : "btn-cyan"
-              }`}
+              }
+              buttonClassName="map-toolbar-action-btn"
               disabled={
                 !effectiveDirty ||
                 hasBlockingErrors ||
@@ -426,22 +429,27 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
                   ? "No unsaved map changes"
                   : "Persist map layout and structure"
               }
-              onClick={handleSaveClick}
-            >
-              {effectiveSaving ? (
-                <>Saving...</>
-              ) : effectiveDirty ? (
-                <>
-                  <Save size={13} />
-                  <span className="map-toolbar-btn-label">Save Map</span>
-                </>
-              ) : (
-                <>
-                  <Check size={13} />
-                  <span className="map-toolbar-btn-label">Map Saved</span>
-                </>
-              )}
-            </button>
+              menuDirection="down"
+              menuAlign="right"
+              testId="map-save-btn"
+              onSave={handleSaveClick}
+              onSaveAndClose={handleSaveAndCloseClick}
+              label={
+                effectiveSaving ? (
+                  <>Saving...</>
+                ) : effectiveDirty ? (
+                  <>
+                    <Save size={13} />
+                    <span className="map-toolbar-btn-label">Save Map</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={13} />
+                    <span className="map-toolbar-btn-label">Map Saved</span>
+                  </>
+                )
+              }
+            />
           )}
 
           {onClose && (

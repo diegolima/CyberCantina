@@ -145,9 +145,13 @@ export interface SpatialTopologyViewProps {
   worldContext?: WorldPromptContext;
   hasUnsavedChanges?: boolean;
   isSavingMap?: boolean;
-  onSaveMap?: (graph: GraphSnapshot) => Promise<void> | void;
+  onSaveMap?: (graph: GraphSnapshot) => Promise<boolean | void> | boolean | void;
+  onSaveAndCloseMap?: (
+    graph: GraphSnapshot
+  ) => Promise<boolean | void> | boolean | void;
   onChangeGraph?: (next: GraphSnapshot) => void;
   onClose?: () => void;
+  onRequestClose?: () => void;
   onReimagineMap?: () => void;
   coLocatedPartyNpcs?: Array<{ id: string; name: string }>;
   onOverrideLocation?: (
@@ -214,8 +218,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   hasUnsavedChanges: externalDirty,
   isSavingMap: externalSaving = false,
   onSaveMap,
+  onSaveAndCloseMap,
   onChangeGraph,
   onClose,
+  onRequestClose,
   onReimagineMap,
   coLocatedPartyNpcs = [],
   onOverrideLocation,
@@ -522,13 +528,28 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const viewportGroupRef = useRef<SVGGElement | null>(null);
 
-  // Keep container selection valid if deleted
+  const pendingSaveSelectionRef = useRef<{
+    selectedLoc: { name: string; container_id: string | null } | null;
+    selectedCont: { name: string; parent_container_id: string | null; depth: number } | null;
+    currentCont: { name: string; parent_container_id: string | null; depth: number } | null;
+  } | null>(null);
+
+  // Keep container selection valid if deleted, reconciling server-assigned IDs after stay-open save
   useEffect(() => {
     if (
       currentContainerId &&
       !workingContainers.some((c) => c.id === currentContainerId)
     ) {
-      setCurrentContainerId(null);
+      const snap = pendingSaveSelectionRef.current?.currentCont;
+      const matched = snap
+        ? workingContainers.find(
+            (c) =>
+              c.name === snap.name &&
+              c.depth === snap.depth &&
+              (c.parent_container_id ?? null) === snap.parent_container_id
+          )
+        : undefined;
+      setCurrentContainerId(matched ? matched.id : null);
     }
   }, [workingContainers, currentContainerId]);
 
@@ -537,7 +558,16 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       selectedContainerId &&
       !workingContainers.some((c) => c.id === selectedContainerId)
     ) {
-      setSelectedContainerId(null);
+      const snap = pendingSaveSelectionRef.current?.selectedCont;
+      const matched = snap
+        ? workingContainers.find(
+            (c) =>
+              c.name === snap.name &&
+              c.depth === snap.depth &&
+              (c.parent_container_id ?? null) === snap.parent_container_id
+          )
+        : undefined;
+      setSelectedContainerId(matched ? matched.id : null);
     }
   }, [workingContainers, selectedContainerId]);
 
@@ -546,7 +576,15 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       selectedLocId &&
       !workingLocations.some((l) => l.id === selectedLocId)
     ) {
-      setSelectedLocId(null);
+      const snap = pendingSaveSelectionRef.current?.selectedLoc;
+      const matched = snap
+        ? workingLocations.find(
+            (l) =>
+              l.name === snap.name &&
+              (l.container_id ?? null) === snap.container_id
+          )
+        : undefined;
+      setSelectedLocId(matched ? matched.id : null);
     }
   }, [workingLocations, selectedLocId]);
 
@@ -1360,30 +1398,82 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     }
   }, [autoLayoutPreview, canAutoLayout, currentContainerId]);
 
-  const handleSaveClick = async () => {
-    if (
-      effectiveMutatingLocked ||
-      !onSaveMap ||
-      hasBlockingErrors ||
-      effectiveSaving
-    ) {
-      return;
+  const capturePendingSelectionSnapshot = () => {
+    const selLoc = selectedLocId
+      ? workingLocations.find((l) => l.id === selectedLocId) ?? null
+      : null;
+    const selCont = selectedContainerId
+      ? workingContainers.find((c) => c.id === selectedContainerId) ?? null
+      : null;
+    const curCont = currentContainerId
+      ? workingContainers.find((c) => c.id === currentContainerId) ?? null
+      : null;
+    pendingSaveSelectionRef.current = {
+      selectedLoc: selLoc
+        ? { name: selLoc.name, container_id: selLoc.container_id ?? null }
+        : null,
+      selectedCont: selCont
+        ? {
+            name: selCont.name,
+            parent_container_id: selCont.parent_container_id ?? null,
+            depth: selCont.depth,
+          }
+        : null,
+      currentCont: curCont
+        ? {
+            name: curCont.name,
+            parent_container_id: curCont.parent_container_id ?? null,
+            depth: curCont.depth,
+          }
+        : null,
+    };
+  };
+
+  const runMapPersist = async (
+    persistFn: (graph: GraphSnapshot) => Promise<boolean | void> | boolean | void
+  ): Promise<boolean> => {
+    if (effectiveMutatingLocked || hasBlockingErrors || effectiveSaving) {
+      return false;
     }
+    capturePendingSelectionSnapshot();
     setInternalSaving(true);
     setSaveError(null);
     try {
-      await onSaveMap(
+      const result = await persistFn(
         cloneGraph(workingContainers, workingLocations, workingEdges)
       );
+      if (result === false) {
+        return false;
+      }
       if (!isControlledExternally) {
         setInternalDirty(false);
         setUndoStack([]);
       }
       setStatusNotice("Map saved.");
+      return true;
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setInternalSaving(false);
+    }
+  };
+
+  const handleSaveClick = async (): Promise<boolean> => {
+    if (!onSaveMap) return false;
+    return runMapPersist(onSaveMap);
+  };
+
+  const canSaveAndClose = Boolean(onSaveAndCloseMap || onRequestClose || onClose);
+
+  const handleSaveAndCloseClick = async (): Promise<void> => {
+    if (onSaveAndCloseMap) {
+      await runMapPersist(onSaveAndCloseMap);
+      return;
+    }
+    const saved = await handleSaveClick();
+    if (saved) {
+      (onRequestClose ?? onClose)?.();
     }
   };
 
@@ -1680,6 +1770,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         isMutatingLocked={effectiveMutatingLocked}
         validationSummary={validationSummary}
         handleSaveClick={handleSaveClick}
+        handleSaveAndCloseClick={
+          canSaveAndClose ? handleSaveAndCloseClick : undefined
+        }
         onClose={onClose}
         handleCloseClick={handleCloseClick}
         currentContainerId={currentContainerId}

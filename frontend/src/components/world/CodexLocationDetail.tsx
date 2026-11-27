@@ -4,6 +4,7 @@ import type {
   LocationContainer,
   LocationLoreNodeDraft,
   LocationNode,
+  WorldPromptContext,
 } from "../../types";
 import { MapLoreSection } from "../map/MapLoreSection";
 import {
@@ -30,6 +31,7 @@ interface CodexLocationDetailProps {
   unlockLore?: boolean;
   revealedLoreIds?: readonly string[];
   isMutatingLocked?: boolean;
+  worldContext?: WorldPromptContext;
   onSaveCampaignLocationLore?: (
     locationId: string,
     drafts: LocationLoreNodeDraft[]
@@ -63,6 +65,7 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
   unlockLore = false,
   revealedLoreIds = [],
   isMutatingLocked = false,
+  worldContext,
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   onToggleLoreReveal,
@@ -226,6 +229,16 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
               revealedLoreIds={revealedLoreIds}
               onCampaignSave={onSaveCampaignLocationLore}
               onToggleLoreReveal={onToggleLoreReveal}
+              worldContext={worldContext}
+              entityKind="location"
+              parentContainerName={
+                breadcrumb.length > 0
+                  ? breadcrumb[breadcrumb.length - 1].name
+                  : null
+              }
+              targetSummary={location.summary}
+              targetDescription={location.description}
+              targetTags={location.environmental_tags}
             />
           ) : (
             <>
@@ -433,6 +446,15 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
                 revealedLoreIds={revealedLoreIds}
                 onCampaignSave={onSaveCampaignContainerLore}
                 onToggleLoreReveal={onToggleLoreReveal}
+                worldContext={worldContext}
+                entityKind="container"
+                parentContainerName={
+                  breadcrumb.length > 0
+                    ? breadcrumb[breadcrumb.length - 1].name
+                    : null
+                }
+                targetDescription={container.description}
+                targetTags={container.environmental_tags}
               />
             ) : (
               <>

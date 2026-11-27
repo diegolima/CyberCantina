@@ -33,12 +33,16 @@
   letter-spacing: 0.05em;
   font-size: 1.05rem;
   color: var(--text-primary);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .home-nav-actions {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .home-nav-btn {
@@ -53,7 +57,13 @@
   background: var(--surface-glass-1);
   color: var(--text-secondary);
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
   transition: all 0.15s ease;
+}
+
+.home-nav-btn--icon {
+  padding: 5px 9px;
 }
 
 .home-nav-btn:hover {
@@ -82,7 +92,26 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
   transition: all 0.15s ease;
+}
+
+.home-nav-profile-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.home-nav-profile-name {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
 }
 
 .home-nav-profile-chip:hover {
