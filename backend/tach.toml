@@ -107,6 +107,12 @@ depends_on = [
 ]
 
 [[modules]]
+path = "app.engine.spatial_geometry"
+depends_on = [
+    "app.schemas",
+]
+
+[[modules]]
 path = "app.engine.telemetry"
 depends_on = [
     "app.schemas",
@@ -137,6 +143,7 @@ depends_on = [
     "app.engine.llm_client",
     "app.engine.mentions",
     "app.engine.parties",
+    "app.engine.spatial_geometry",
     "app.engine.telemetry",
     "app.prompts",
     "app.schemas",
@@ -182,6 +189,7 @@ depends_on = [
     "app.engine.mentions",
     "app.engine.parties",
     "app.engine.phase2_context",
+    "app.engine.spatial_geometry",
     "app.engine.telemetry",
     "app.prompts",
     "app.schemas",
@@ -259,6 +267,7 @@ depends_on = [
     "app.engine.mentions",
     "app.engine.parties",
     "app.engine.phase2_context",
+    "app.engine.spatial_geometry",
     "app.engine.telemetry",
     "app.engine.world_clock",
     "app.prompts",
@@ -403,6 +412,7 @@ depends_on = [
     "app.engine.phase4_prose",
     "app.engine.phase5_clerk",
     "app.engine.prop_spawn",
+    "app.engine.spatial_geometry",
     "app.engine.telemetry",
     "app.housekeeping",
     "app.prompts",

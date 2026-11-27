@@ -24,6 +24,7 @@ import type { PhysicalStance, PhysicalStateResetReason } from "./physical";
 import type { TurnTelemetry } from "./telemetry";
 import type {
   CompassDirection,
+  EdgeDistanceMode,
   LocationContainer,
   LocationEdge,
   LocationNode,
@@ -169,19 +170,39 @@ export interface CharacterAgentDelta {
 
 export interface ImprovisedLocationSpec {
   name: string;
+  summary?: string;
   description: string;
-  direction_label: string;
+  direction_label?: string;
+  entry_direction_label?: string;
+  return_direction_label?: string;
   compass_direction: CompassDirection;
   distance_meters: number;
   environmental_tags: string[];
+  is_exterior?: boolean;
+  distance_mode?: EdgeDistanceMode;
+  is_vertical?: boolean;
+}
+
+export interface ImprovisedLinkSpec {
+  to_location_id: string;
+  entry_direction_label: string;
+  return_direction_label: string;
+  compass_direction: CompassDirection;
+  distance_meters: number;
+  speed_modifier?: number;
+  travel_mode?: string | null;
+  distance_mode?: EdgeDistanceMode;
+  is_vertical?: boolean;
+  clamped_from_meters?: number | null;
 }
 
 export interface WorldPostTurnDelta {
   elapsed_minutes: number;
   new_world_timestamp?: string | null;
-  transition_type: "stay" | "move_existing" | "improvise_new";
+  transition_type: "stay" | "move_existing" | "improvise_new" | "connect_existing";
   target_location_id?: string | null;
   improvised_location?: ImprovisedLocationSpec | null;
+  improvised_link?: ImprovisedLinkSpec | null;
   notable_event_summary?: string | null;
   scene_flags_updated: string[];
   scene_flags_removed: string[];
@@ -203,9 +224,11 @@ export interface ArbitrationRulingRecord {
 export interface PostTurnStateDelta {
   elapsed_minutes: number;
   new_world_timestamp?: string | null;
-  transition_type: "stay" | "move_existing" | "improvise_new";
+  transition_type: "stay" | "move_existing" | "improvise_new" | "connect_existing";
   target_location_id?: string | null;
   improvised_location?: ImprovisedLocationSpec | null;
+  improvised_link?: ImprovisedLinkSpec | null;
+  traversed_location_ids?: string[];
   notable_event_summary?: string | null;
   scene_flags_updated: string[];
   scene_flags_removed?: string[];

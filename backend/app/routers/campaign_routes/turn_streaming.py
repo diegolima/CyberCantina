@@ -30,6 +30,7 @@ from app.engine.parties import (
     synthesize_party_action_message,
     validate_party_action,
 )
+from app.engine.spatial_geometry import select_candidate_known_locations
 from app.db.repos.turns import resolve_effective_location_props
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import (
@@ -556,6 +557,15 @@ async def _execute_turn_stream_events_unlocked(
     )
 
     # PHASE 1: Auxiliary Pre-Turn Analysis, Multi-Character Speaker Orchestration & RNG Mechanics
+    candidate_known_locations = select_candidate_known_locations(
+        world,
+        active_location.id,
+        neighbors,
+        visited_location_ids=parent_turn.world_snapshot.visited_location_ids or [],
+        revealed_edge_ids=revealed_edge_id_set,
+        gm_unlocked=bool(campaign.world_settings.unlock_lore),
+        user_message=effective_user_message,
+    )
     if is_narrator:
         if req.narrative_mode == "complication":
             subtext = "Introduce an unexpected external complication or inciting incident"
@@ -622,6 +632,7 @@ async def _execute_turn_stream_events_unlocked(
             party_action=effective_party_action,
             is_search_action=is_search_action,
             search_focus=search_focus,
+            other_known_locations=candidate_known_locations,
         )
         character = primary_character
         actor_id = "__solo__"
@@ -657,6 +668,7 @@ async def _execute_turn_stream_events_unlocked(
             party_action=effective_party_action,
             is_search_action=is_search_action,
             search_focus=search_focus,
+            other_known_locations=candidate_known_locations,
         )
         # Resolve active speaker selected by Phase 1 from characters present in the room
         character = (

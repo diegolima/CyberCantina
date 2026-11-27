@@ -16,9 +16,9 @@ Source of truth: [backend/tach.toml](../../backend/tach.toml) validated by `tach
 | `app.engine.char_agent` | `app.config`, `app.engine.affective_engine`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.telemetry`, `app.prompts`, `app.schemas` |
 | `app.engine.character_agent` | `app.config`, `app.engine.affective_engine`, `app.engine.char_agent`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.prompts`, `app.schemas` |
 | `app.engine.choices` | `app.engine.phase1_pre`, `app.schemas` |
-| `app.engine.clerk` | `app.config`, `app.db`, `app.engine.affective_engine`, `app.engine.character_agent`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase2_context`, `app.engine.telemetry`, `app.engine.world_clock`, `app.prompts`, `app.schemas` |
+| `app.engine.clerk` | `app.config`, `app.db`, `app.engine.affective_engine`, `app.engine.character_agent`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase2_context`, `app.engine.spatial_geometry`, `app.engine.telemetry`, `app.engine.world_clock`, `app.prompts`, `app.schemas` |
 | `app.engine.clerk_placement` | `app.config`, `app.engine.llm_client`, `app.prompts`, `app.schemas` |
-| `app.engine.cognition` | `app.config`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase2_context`, `app.engine.telemetry`, `app.prompts`, `app.schemas` |
+| `app.engine.cognition` | `app.config`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase2_context`, `app.engine.spatial_geometry`, `app.engine.telemetry`, `app.prompts`, `app.schemas` |
 | `app.engine.context` | `app.config`, `app.db`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.mentions`, `app.engine.parties`, `app.engine.telemetry`, `app.engine.world_clock`, `app.prompts`, `app.providers`, `app.schemas` |
 | `app.engine.game_mechanics` | *(leaf / none)* |
 | `app.engine.gm_codex` | `app.config`, `app.db`, `app.engine.gm_talk`, `app.engine.llm_client`, `app.prompts`, `app.providers`, `app.schemas`, `app.security` |
@@ -27,7 +27,7 @@ Source of truth: [backend/tach.toml](../../backend/tach.toml) validated by `tach
 | `app.engine.llm_client` | `app.config`, `app.engine.telemetry`, `app.providers`, `app.schemas`, `app.security` |
 | `app.engine.mentions` | `app.schemas` |
 | `app.engine.parties` | `app.schemas` |
-| `app.engine.phase1_pre` | `app.config`, `app.engine.choices`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.telemetry`, `app.prompts`, `app.schemas` |
+| `app.engine.phase1_pre` | `app.config`, `app.engine.choices`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.spatial_geometry`, `app.engine.telemetry`, `app.prompts`, `app.schemas` |
 | `app.engine.phase2_context` | `app.config`, `app.db`, `app.engine.affective_engine`, `app.engine.context`, `app.engine.mentions`, `app.engine.parties`, `app.engine.world_clock`, `app.prompts`, `app.schemas` |
 | `app.engine.phase3_actor` | `app.engine.llm_client`, `app.engine.phase3_cognition`, `app.engine.phase4_prose`, `app.schemas` |
 | `app.engine.phase3_cognition` | `app.config`, `app.engine.affective_engine`, `app.engine.cognition`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase2_context`, `app.prompts`, `app.schemas` |
@@ -35,13 +35,14 @@ Source of truth: [backend/tach.toml](../../backend/tach.toml) validated by `tach
 | `app.engine.phase4_prose` | `app.config`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase3_cognition`, `app.engine.telemetry`, `app.schemas` |
 | `app.engine.phase5_clerk` | `app.config`, `app.db`, `app.engine.affective_engine`, `app.engine.character_agent`, `app.engine.clerk`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase2_context`, `app.engine.world_clock`, `app.prompts`, `app.schemas` |
 | `app.engine.prop_spawn` | `app.config`, `app.engine.llm_client`, `app.engine.telemetry`, `app.schemas` |
+| `app.engine.spatial_geometry` | `app.schemas` |
 | `app.engine.telemetry` | `app.schemas` |
 | `app.engine.world_clock` | `app.schemas` |
 | `app.housekeeping` | `app.config`, `app.db`, `app.schemas`, `app.security` |
 | `app.main` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.llm_client`, `app.housekeeping`, `app.providers`, `app.routers`, `app.security` |
 | `app.prompts` | *(leaf / none)* |
 | `app.providers` | `app.config`, `app.db`, `app.schemas`, `app.security` |
-| `app.routers` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.clerk_placement`, `app.engine.gm_codex`, `app.engine.gm_talk`, `app.engine.gm_tools`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase1_pre`, `app.engine.phase2_context`, `app.engine.phase3_actor`, `app.engine.phase3_cognition`, `app.engine.phase4_clerk`, `app.engine.phase4_prose`, `app.engine.phase5_clerk`, `app.engine.prop_spawn`, `app.engine.telemetry`, `app.housekeeping`, `app.prompts`, `app.providers`, `app.schemas`, `app.security`, `app.services`, `app.wizards` |
+| `app.routers` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.clerk_placement`, `app.engine.gm_codex`, `app.engine.gm_talk`, `app.engine.gm_tools`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase1_pre`, `app.engine.phase2_context`, `app.engine.phase3_actor`, `app.engine.phase3_cognition`, `app.engine.phase4_clerk`, `app.engine.phase4_prose`, `app.engine.phase5_clerk`, `app.engine.prop_spawn`, `app.engine.spatial_geometry`, `app.engine.telemetry`, `app.housekeeping`, `app.prompts`, `app.providers`, `app.schemas`, `app.security`, `app.services`, `app.wizards` |
 | `app.schemas` | `app.config` |
 | `app.security` | *(leaf / none)* |
 | `app.services` | `app.config`, `app.db`, `app.dependencies`, `app.schemas`, `app.security`, `app.wizards` |
@@ -99,6 +100,7 @@ graph TD
     app.engine.clerk --> app.engine.mentions
     app.engine.clerk --> app.engine.parties
     app.engine.clerk --> app.engine.phase2_context
+    app.engine.clerk --> app.engine.spatial_geometry
     app.engine.clerk --> app.engine.telemetry
     app.engine.clerk --> app.engine.world_clock
     app.engine.clerk --> app.prompts
@@ -114,6 +116,7 @@ graph TD
     app.engine.cognition --> app.engine.mentions
     app.engine.cognition --> app.engine.parties
     app.engine.cognition --> app.engine.phase2_context
+    app.engine.cognition --> app.engine.spatial_geometry
     app.engine.cognition --> app.engine.telemetry
     app.engine.cognition --> app.prompts
     app.engine.cognition --> app.schemas
@@ -165,6 +168,7 @@ graph TD
     app.engine.phase1_pre --> app.engine.llm_client
     app.engine.phase1_pre --> app.engine.mentions
     app.engine.phase1_pre --> app.engine.parties
+    app.engine.phase1_pre --> app.engine.spatial_geometry
     app.engine.phase1_pre --> app.engine.telemetry
     app.engine.phase1_pre --> app.prompts
     app.engine.phase1_pre --> app.schemas
@@ -214,6 +218,7 @@ graph TD
     app.engine.prop_spawn --> app.engine.llm_client
     app.engine.prop_spawn --> app.engine.telemetry
     app.engine.prop_spawn --> app.schemas
+    app.engine.spatial_geometry --> app.schemas
     app.engine.telemetry --> app.schemas
     app.engine.world_clock --> app.schemas
     app.housekeeping --> app.config
@@ -255,6 +260,7 @@ graph TD
     app.routers --> app.engine.phase4_prose
     app.routers --> app.engine.phase5_clerk
     app.routers --> app.engine.prop_spawn
+    app.routers --> app.engine.spatial_geometry
     app.routers --> app.engine.telemetry
     app.routers --> app.housekeeping
     app.routers --> app.prompts

@@ -114,7 +114,7 @@ export interface PreTurnAnalysis {
   subtext_interpretation: string;
   mentioned_entities: string[];
   memory_search_queries: string[];
-  spatial_intent: "stay" | "move_known" | "explore_new";
+  spatial_intent: "stay" | "move_known" | "explore_new" | "connect_existing";
   target_location_hint?: string | null;
   active_speaker_id?: string | null;
   speaker_order?: string[];

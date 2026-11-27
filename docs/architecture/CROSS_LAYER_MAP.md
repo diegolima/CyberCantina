@@ -525,6 +525,12 @@ erDiagram
 | :--- | :--- |
 | `backend/app/engine/prop_spawn.py` | Critical-success situational room prop generation with strict power bounds. |
 
+#### `app.engine.spatial_geometry`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/engine/spatial_geometry.py` | Pure 2D spatial geometry, visible-path routing, and ReDoS-safe travel cue helpers. |
+
 #### `app.engine.telemetry`
 
 | File | Summary |

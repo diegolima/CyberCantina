@@ -6,13 +6,14 @@ import json
 import sqlite3
 from typing import Literal
 import uuid
-from app.schemas.turn import ImprovisedLocationSpec
+from app.schemas.turn import ImprovisedLinkSpec, ImprovisedLocationSpec
 from app.schemas.world import (
     COMPASS_PASSAGE_NAMES,
     DEFAULT_INTERIOR_DISTANCE_METERS,
     MAX_EDGE_DISTANCE_METERS,
     OPPOSITE_COMPASS,
     LocationContainer,
+    LocationEdge,
     LocationNode,
     NeighborLocationView,
     WorldRecord,
@@ -503,6 +504,8 @@ class WorldLocationsMixin:
                     direction_label=spec.entry_direction_label,
                     compass_direction=assigned_dir,
                     distance_meters=spec.distance_meters,
+                    distance_mode=spec.distance_mode,
+                    is_vertical=spec.is_vertical,
                     created_at_turn_id=created_at_turn_id,
                 )
                 self._insert_edge_row(
@@ -514,6 +517,8 @@ class WorldLocationsMixin:
                     direction_label=spec.return_direction_label,
                     compass_direction=rev_dir,
                     distance_meters=spec.distance_meters,
+                    distance_mode=spec.distance_mode,
+                    is_vertical=spec.is_vertical,
                     created_at_turn_id=created_at_turn_id,
                 )
                 conn.commit()
@@ -715,6 +720,8 @@ class WorldLocationsMixin:
                 direction_label=spec.entry_direction_label,
                 compass_direction=new_slot,
                 distance_meters=spec.distance_meters,
+                distance_mode=spec.distance_mode,
+                is_vertical=spec.is_vertical,
                 created_at_turn_id=created_at_turn_id,
             )
             self._insert_edge_row(
@@ -726,6 +733,8 @@ class WorldLocationsMixin:
                 direction_label=spec.return_direction_label,
                 compass_direction=OPPOSITE_COMPASS[new_slot],
                 distance_meters=spec.distance_meters,
+                distance_mode=spec.distance_mode,
+                is_vertical=spec.is_vertical,
                 created_at_turn_id=created_at_turn_id,
             )
             conn.commit()
@@ -733,3 +742,176 @@ class WorldLocationsMixin:
             conn.close()
 
         return self.get_location(new_loc_id)
+
+    def add_improvised_link(
+        self,
+        *,
+        world_id: str,
+        from_location_id: str,
+        to_location_id: str,
+        created_at_turn_id: str,
+        spec: ImprovisedLinkSpec,
+        valid_turn_ids: set[str] | None = None,
+    ) -> tuple[LocationEdge, bool]:
+        """Connect two existing locations branch-safely with a newly improvised direct route."""
+        if from_location_id == to_location_id:
+            raise ValueError("Cannot create an improvised link from a location to itself")
+
+        effective_turns: set[str] | None = None
+        if valid_turn_ids is not None:
+            effective_turns = set(valid_turn_ids) | {created_at_turn_id}
+        else:
+            try:
+                chain = self.get_branch_turn_chain(created_at_turn_id)
+                if chain:
+                    effective_turns = {t.id for t in chain} | {created_at_turn_id}
+            except Exception:
+                effective_turns = None
+
+        from_neighbors = self.get_neighbor_locations(
+            world_id,
+            from_location_id,
+            valid_turn_ids=effective_turns,
+        )
+        # Idempotent guard: reuse existing direct edge if already connected
+        existing_direct = next(
+            (nb for nb in from_neighbors if nb.destination.id == to_location_id),
+            None,
+        )
+        if existing_direct is not None:
+            world_now = self.get_world(world_id, valid_turn_ids=effective_turns)
+            existing_edge = next(
+                (e for e in world_now.edges if e.id == existing_direct.edge_id),
+                LocationEdge(
+                    id=existing_direct.edge_id,
+                    world_id=world_id,
+                    from_location_id=from_location_id,
+                    to_location_id=to_location_id,
+                    direction_label=existing_direct.direction_label,
+                    compass_direction=existing_direct.compass_direction,
+                    distance_meters=existing_direct.distance_meters,
+                    speed_modifier=existing_direct.speed_modifier,
+                    travel_mode=existing_direct.travel_mode,
+                    obstacles=existing_direct.obstacles,
+                    is_blocked=existing_direct.is_blocked,
+                    is_secret=existing_direct.is_secret,
+                    distance_mode=existing_direct.distance_mode,
+                    is_vertical=existing_direct.is_vertical,
+                ),
+            )
+            return existing_edge, False
+
+        from_loc = self.get_location(from_location_id)
+        to_loc = self.get_location(to_location_id)
+        target_dir = normalize_compass_direction(
+            spec.compass_direction,
+            f"{spec.entry_direction_label} {to_loc.name}",
+        )
+
+        # Respect 8-neighbor cap cleanly if source already has 8 distinct neighbors and a hub in target_dir
+        distinct_from_dests = {nb.destination.id for nb in from_neighbors}
+        actual_from_id = from_location_id
+        actual_from_name = from_loc.name
+        actual_from_neighbors = from_neighbors
+        if len(distinct_from_dests) >= 8:
+            hub_nb = next(
+                (
+                    nb
+                    for nb in from_neighbors
+                    if nb.compass_direction == target_dir and nb.destination.is_hub
+                ),
+                None,
+            )
+            if hub_nb is not None:
+                return self.add_improvised_link(
+                    world_id=world_id,
+                    from_location_id=hub_nb.destination.id,
+                    to_location_id=to_location_id,
+                    created_at_turn_id=created_at_turn_id,
+                    spec=spec,
+                    valid_turn_ids=effective_turns,
+                )
+
+        to_neighbors = self.get_neighbor_locations(
+            world_id,
+            to_location_id,
+            valid_turn_ids=effective_turns,
+        )
+
+        from_occupied = {
+            nb.compass_direction
+            for nb in actual_from_neighbors
+            if nb.compass_direction is not None
+        }
+        to_occupied = {
+            nb.compass_direction
+            for nb in to_neighbors
+            if nb.compass_direction is not None
+        }
+        assigned_dir = pick_available_compass_direction(target_dir, from_occupied)
+        desired_rev_dir = OPPOSITE_COMPASS[assigned_dir]
+        rev_dir = pick_available_compass_direction(desired_rev_dir, to_occupied)
+
+        fwd_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
+        rev_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
+        fwd_label = (spec.entry_direction_label or "").strip() or f"Route to {to_loc.name}"
+        rev_label = (spec.return_direction_label or "").strip() or f"Return to {actual_from_name}"
+
+        conn = self._connect()
+        try:
+            self._insert_edge_row(
+                conn,
+                edge_id=fwd_edge_id,
+                world_id=world_id,
+                from_location_id=actual_from_id,
+                to_location_id=to_location_id,
+                direction_label=fwd_label,
+                compass_direction=assigned_dir,
+                distance_meters=spec.distance_meters,
+                speed_modifier=spec.speed_modifier,
+                travel_mode=spec.travel_mode,
+                distance_mode=spec.distance_mode,
+                is_vertical=spec.is_vertical,
+                created_at_turn_id=created_at_turn_id,
+            )
+            has_rev = any(nb.destination.id == actual_from_id for nb in to_neighbors)
+            if not has_rev:
+                self._insert_edge_row(
+                    conn,
+                    edge_id=rev_edge_id,
+                    world_id=world_id,
+                    from_location_id=to_location_id,
+                    to_location_id=actual_from_id,
+                    direction_label=rev_label,
+                    compass_direction=rev_dir,
+                    distance_meters=spec.distance_meters,
+                    speed_modifier=spec.speed_modifier,
+                    travel_mode=spec.travel_mode,
+                    distance_mode=spec.distance_mode,
+                    is_vertical=spec.is_vertical,
+                    created_at_turn_id=created_at_turn_id,
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return (
+            LocationEdge(
+                id=fwd_edge_id,
+                world_id=world_id,
+                from_location_id=actual_from_id,
+                to_location_id=to_location_id,
+                direction_label=fwd_label,
+                compass_direction=assigned_dir,
+                distance_meters=spec.distance_meters,
+                speed_modifier=normalize_edge_speed_modifier(spec.speed_modifier),
+                travel_mode=normalize_edge_travel_mode(spec.travel_mode),
+                obstacles=[],
+                is_blocked=False,
+                is_secret=False,
+                distance_mode=normalize_edge_distance_mode(spec.distance_mode),
+                is_vertical=normalize_edge_is_vertical(spec.is_vertical),
+                created_at_turn_id=created_at_turn_id,
+            ),
+            True,
+        )

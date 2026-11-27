@@ -1052,6 +1052,7 @@
       "how_it_changes": [
         "Shift+Click any map distance badge to toggle an instant speed-adjusted duration preview; double-click a link badge (when editing is unlocked) to edit metric distance inline.",
         "Containerized Level 0 locations can pin an External Spatial Anchor so upper/outer container distances constrain underground/interior links; open Consistency in the map toolbar to inspect diagnostics, Preview Reconciliation, or enable Auto-Sync Unlocked Links.",
+        "During live play, improvising a new room aligns stated walk duration/distance to 70 m/min and enforces the travel-time clock floor, retracing known rooms steps along existing visible routes without spawning duplicates, and improvising a direct shortcut back to a known location clamps to 2D geometry unless described as a vertical shaft or Non-Euclidean portal.",
         "In play, succeeding on a discovery roll or searching when dice are Disabled reveals both directions of a Secret Link on the active timeline branch."
       ],
       "effect_on_play": [

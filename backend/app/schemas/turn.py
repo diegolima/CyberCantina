@@ -54,10 +54,15 @@ from app.schemas.persona import PersonaTurnStateSnapshot
 from app.schemas.persona import PersonaRecord
 from app.schemas.telemetry import TurnTelemetry
 from app.schemas.world import (
+    DEFAULT_EDGE_SPEED_MODIFIER,
     DEFAULT_EXTERIOR_DISTANCE_METERS,
     DEFAULT_INTERIOR_DISTANCE_METERS,
     MAX_EDGE_DISTANCE_METERS,
+    MAX_EDGE_SPEED_MODIFIER,
+    MAX_EDGE_TRAVEL_MODE_LENGTH,
+    MIN_EDGE_SPEED_MODIFIER,
     CompassDirection,
+    EdgeDistanceMode,
     LocationContainer,
     LocationEdge,
     LocationNode,
@@ -65,7 +70,12 @@ from app.schemas.world import (
     LoreNode,
     NeighborLocationView,
     normalize_compass_direction,
+    normalize_edge_distance_mode,
+    normalize_edge_is_vertical,
+    normalize_edge_speed_modifier,
+    normalize_edge_travel_mode,
     resolve_legacy_edge_distance_meters,
+    resolve_legacy_edge_flags,
     validate_container_hierarchy_integrity,
 )
 
@@ -309,7 +319,7 @@ class PreTurnLLMOutput(BaseModel):
         default_factory=list,
         description="1-2 semantic queries to run against the vector store.",
     )
-    spatial_intent: Literal["stay", "move_known", "explore_new"] = "stay"
+    spatial_intent: Literal["stay", "move_known", "explore_new", "connect_existing"] = "stay"
     target_location_hint: str | None = None
     active_speaker_id: str | None = Field(
         default=None,
@@ -505,6 +515,14 @@ class ImprovisedLocationSpec(BaseModel):
         default=False,
         description="True if the newly explored location is outside the current building/compound; False if exploring deeper inside.",
     )
+    distance_mode: EdgeDistanceMode = Field(
+        default="flexible",
+        description="Distance rule: 'flexible' (default), 'locked', or 'non_euclidean' (strictly for magic portals/teleport/folded space).",
+    )
+    is_vertical: bool = Field(
+        default=False,
+        description="True if the link is primarily a vertical climb/descent (ladder, stairs, shaft, hatch, elevator).",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -516,6 +534,7 @@ class ImprovisedLocationSpec(BaseModel):
             DEFAULT_EXTERIOR_DISTANCE_METERS if is_ext else DEFAULT_INTERIOR_DISTANCE_METERS
         )
         resolved = resolve_legacy_edge_distance_meters(data, fallback=fallback)
+        resolved = resolve_legacy_edge_flags(resolved)
         if isinstance(resolved, dict) and "distance_meters" not in resolved:
             resolved["distance_meters"] = fallback
         return resolved
@@ -526,6 +545,113 @@ class ImprovisedLocationSpec(BaseModel):
         if v is None:
             return "N"
         return normalize_compass_direction(str(v))
+
+    @field_validator("distance_mode", mode="before")
+    @classmethod
+    def _coerce_distance_mode(cls, v: Any) -> EdgeDistanceMode:
+        return normalize_edge_distance_mode(v)
+
+    @field_validator("is_vertical", mode="before")
+    @classmethod
+    def _coerce_is_vertical(cls, v: Any) -> bool:
+        return normalize_edge_is_vertical(v)
+
+
+class ImprovisedLinkSpec(BaseModel):
+    """Bidirectional link connecting the active location to an existing non-adjacent known location."""
+
+    model_config = ConfigDict(
+        json_schema_extra=lambda schema: schema.update(
+            required=[
+                k
+                for k in schema.get("properties", {}).keys()
+                if k != "clamped_from_meters"
+            ]
+        )
+    )
+
+    to_location_id: str = Field(
+        default="",
+        description="Exact location ID of the existing non-adjacent destination.",
+    )
+    entry_direction_label: str = Field(
+        default="Direct route",
+        description="Short outgoing passage label from the current location toward the target.",
+    )
+    return_direction_label: str = Field(
+        default="Back the way you came",
+        description="Short return passage label from the target back to the current location.",
+    )
+    compass_direction: CompassDirection = "N"
+    distance_meters: int = Field(
+        default=DEFAULT_EXTERIOR_DISTANCE_METERS,
+        ge=1,
+        le=MAX_EDGE_DISTANCE_METERS,
+        description="Physical length of the newly opened direct route in meters.",
+    )
+    speed_modifier: float = Field(
+        default=DEFAULT_EDGE_SPEED_MODIFIER,
+        ge=MIN_EDGE_SPEED_MODIFIER,
+        le=MAX_EDGE_SPEED_MODIFIER,
+        description="Pace multiplier along this passage (1.0 normal walking, 2.0 sprint/jog, 3.0 bike/mount, 10.0 vehicle).",
+    )
+    travel_mode: str | None = Field(
+        default=None,
+        max_length=MAX_EDGE_TRAVEL_MODE_LENGTH,
+        description="Optional short travel mode label (e.g. 'Alleyway', 'Sprint', 'Portal'), or null.",
+    )
+    distance_mode: EdgeDistanceMode = Field(
+        default="flexible",
+        description="'flexible' (default) or 'non_euclidean' strictly for magic portals/teleport/folded space.",
+    )
+    is_vertical: bool = Field(
+        default=False,
+        description="True if this route is a vertical transition (stairs, ladder, hatch, elevator).",
+    )
+    clamped_from_meters: int | None = Field(
+        default=None,
+        description="Original un-clamped meters before 2D geometry clamping adjusted the improvised link.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        resolved = resolve_legacy_edge_distance_meters(
+            data, fallback=DEFAULT_EXTERIOR_DISTANCE_METERS
+        )
+        resolved = resolve_legacy_edge_flags(resolved)
+        if isinstance(resolved, dict) and "distance_meters" not in resolved:
+            resolved["distance_meters"] = DEFAULT_EXTERIOR_DISTANCE_METERS
+        return resolved
+
+    @field_validator("compass_direction", mode="before")
+    @classmethod
+    def _coerce_link_compass(cls, v: Any) -> CompassDirection:
+        if v is None:
+            return "N"
+        return normalize_compass_direction(str(v))
+
+    @field_validator("speed_modifier", mode="before")
+    @classmethod
+    def _coerce_link_speed(cls, v: Any) -> float:
+        return normalize_edge_speed_modifier(v)
+
+    @field_validator("travel_mode", mode="before")
+    @classmethod
+    def _coerce_link_travel_mode(cls, v: Any) -> str | None:
+        return normalize_edge_travel_mode(v)
+
+    @field_validator("distance_mode", mode="before")
+    @classmethod
+    def _coerce_link_distance_mode(cls, v: Any) -> EdgeDistanceMode:
+        return normalize_edge_distance_mode(v)
+
+    @field_validator("is_vertical", mode="before")
+    @classmethod
+    def _coerce_link_is_vertical(cls, v: Any) -> bool:
+        return normalize_edge_is_vertical(v)
 
 
 class ExtractedCharacterMemory(BaseModel):
@@ -678,9 +804,10 @@ class WorldPostTurnDelta(BaseModel):
             "'they slept until morning', 'three days later'). Overrides elapsed_minutes."
         ),
     )
-    transition_type: Literal["stay", "move_existing", "improvise_new"] = "stay"
+    transition_type: Literal["stay", "move_existing", "improvise_new", "connect_existing"] = "stay"
     target_location_id: str | None = None
     improvised_location: ImprovisedLocationSpec | None = None
+    improvised_link: ImprovisedLinkSpec | None = None
     notable_event_summary: str | None = Field(
         default=None,
         description="1-sentence objective summary if a significant macro plot or world-state event transpired.",
@@ -1039,9 +1166,11 @@ class PostTurnStateDelta(BaseModel):
             "'they slept until morning', 'three days later'). Overrides elapsed_minutes."
         ),
     )
-    transition_type: Literal["stay", "move_existing", "improvise_new"] = "stay"
+    transition_type: Literal["stay", "move_existing", "improvise_new", "connect_existing"] = "stay"
     target_location_id: str | None = None
     improvised_location: ImprovisedLocationSpec | None = None
+    improvised_link: ImprovisedLinkSpec | None = None
+    traversed_location_ids: list[str] = Field(default_factory=list)
     notable_event_summary: str | None = Field(
         default=None,
         description="1-sentence atomic memory if a significant plot or relationship event transpired.",

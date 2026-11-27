@@ -46,6 +46,13 @@ from app.engine.parties import (
     resolve_phase5_spatial_and_parties,
 )
 from app.engine.phase2_context import resolve_character_previous_state
+from app.engine.spatial_geometry import (
+    CandidateKnownLocation,
+    extract_travel_cues,
+    format_candidate_known_locations_block,
+    normalize_location_name_key,
+    select_candidate_known_locations,
+)
 from app.engine.world_clock import (
     advance_world_timestamp,
     describe_world_timestamp,
@@ -87,6 +94,7 @@ from app.schemas.turn import (
     CharacterAgentDelta,
     EpisodicChunkLLMOutput,
     EpisodicChunkRecord,
+    ImprovisedLinkSpec,
     MajorEventRecord,
     PersonaGossipEvent,
     Phase4ProgressCallback,
@@ -100,6 +108,8 @@ from app.schemas.turn import (
     WorldStateSnapshot,
 )
 from app.schemas.world import (
+    DEFAULT_EDGE_SPEED_MODIFIER,
+    MAX_EDGE_DISTANCE_METERS,
     WALKING_METERS_PER_MINUTE,
     LocationNode,
     LocationProp,
@@ -109,6 +119,9 @@ from app.schemas.world import (
     format_distance_meters,
     format_exit_travel_phrase,
     normalize_and_validate_entity_tags,
+    normalize_compass_direction,
+    normalize_edge_distance_mode,
+    normalize_edge_is_vertical,
     normalize_edge_speed_modifier,
 )
 
@@ -341,9 +354,35 @@ async def run_phase5_post_turn_clerk(
             canon_id = ln.origin_lore_id or ln.id
             if canon_id not in prior_revealed_set and ln.id not in prior_revealed_set:
                 candidate_secrets.append(ln)
+    world_for_secrets = None
+    gm_unlocked_spatial = False
+    candidate_known_locations: list[CandidateKnownLocation] = []
+    prior_revealed_edge_ids_spatial = {
+        *(
+            prior_branch_turns[-1].world_snapshot.revealed_edge_ids
+            if prior_branch_turns
+            else []
+        ),
+        *(completed_turn.world_snapshot.revealed_edge_ids or []),
+        *(newly_discovered_edge_ids or ()),
+    }
+    try:
+        camp_for_spatial = repo.get_campaign(campaign_id)
+        gm_unlocked_spatial = bool(camp_for_spatial.world_settings.unlock_lore)
+    except Exception:
+        gm_unlocked_spatial = False
     try:
         world_for_secrets = repo.get_world(
             world_id, valid_turn_ids=valid_turn_ids, campaign_id=campaign_id
+        )
+        candidate_known_locations = select_candidate_known_locations(
+            world_for_secrets,
+            active_location.id,
+            neighbors,
+            visited_location_ids=list(completed_turn.world_snapshot.visited_location_ids or []),
+            revealed_edge_ids=prior_revealed_edge_ids_spatial,
+            gm_unlocked=gm_unlocked_spatial,
+            user_message=completed_turn.user_message,
         )
         if active_location.container_id:
             imm_cont = next(
@@ -423,6 +462,12 @@ async def run_phase5_post_turn_clerk(
         post_turn_prompt_template or get_default_prompt("clerk_post_turn_system"),
         character_name=character.name,
     )
+    other_known_block = (
+        f"Other Known Locations (not directly linked yet):\n"
+        f"{format_candidate_known_locations_block(candidate_known_locations, include_ids=True)}\n"
+        if candidate_known_locations
+        else ""
+    )
     world_user_prompt = (
         f"Current In-Game Time (start of this turn): {current_time_str}\n"
         f"Current Location: {active_location.name} (id='{active_location.id}')\n"
@@ -432,6 +477,7 @@ async def run_phase5_post_turn_clerk(
         f"Player Starting Physical State: {player_start_phys_str}\n"
         f"Current Scene Flags: {existing_flags_str}\n"
         f"Known Exits:\n{neighbor_options}\n"
+        f"{other_known_block}"
         f"{candidate_secrets_block}"
         f"{visible_props_block}\n"
         f"User Message: {completed_turn.user_message}\n"
@@ -485,6 +531,7 @@ async def run_phase5_post_turn_clerk(
                 prev_player_context=prev_player_context,
                 visible_location_props=visible_room_props,
                 present_characters=scene_characters,
+                other_known_locations=candidate_known_locations,
             )
         if on_progress:
             await on_progress(
@@ -652,40 +699,317 @@ async def run_phase5_post_turn_clerk(
                 character_name_map=char_name_map,
             )
 
-    # 1. Resolve new active location (stay, move_existing, or improvise_new)
+    # 1. Resolve new active location (stay, move_existing, connect_existing, or improvise_new)
     new_location_id = active_location.id
     valid_neighbor_ids = {n.destination.id for n in neighbors}
+    neighbor_by_norm_name: dict[str, NeighborLocationView] = {
+        normalize_location_name_key(n.destination.name): n
+        for n in neighbors
+        if normalize_location_name_key(n.destination.name)
+    }
+    candidate_by_id: dict[str, CandidateKnownLocation] = {
+        c.location.id: c for c in candidate_known_locations
+    }
+    candidate_by_norm_name: dict[str, CandidateKnownLocation] = {
+        normalize_location_name_key(c.location.name): c
+        for c in candidate_known_locations
+        if normalize_location_name_key(c.location.name)
+    }
+    combined_turn_text = f"{completed_turn.user_message}\n{completed_turn.raw_prose}"
+    travel_cues = extract_travel_cues(combined_turn_text)
+
+    # A. Deterministic Duplicate-Name Guard: never spawn duplicate node if name matches known location
+    if world_delta.transition_type == "improvise_new" and world_delta.improvised_location is not None:
+        norm_imp = normalize_location_name_key(world_delta.improvised_location.name)
+        if norm_imp and norm_imp in neighbor_by_norm_name:
+            matched_nb = neighbor_by_norm_name[norm_imp]
+            world_delta.transition_type = "move_existing"
+            world_delta.target_location_id = matched_nb.destination.id
+            world_delta.improvised_location = None
+        elif norm_imp and norm_imp in candidate_by_norm_name:
+            matched_cand = candidate_by_norm_name[norm_imp]
+            msg_low_dup = completed_turn.user_message.lower()
+            is_retrace_dup = (
+                any(
+                    kw in msg_low_dup
+                    for kw in ("back through", "retrace", "return along", "via the")
+                )
+                and matched_cand.shortest_path is not None
+            )
+            if is_retrace_dup:
+                world_delta.transition_type = "move_existing"
+                world_delta.target_location_id = matched_cand.location.id
+                world_delta.improvised_location = None
+            else:
+                imp_old = world_delta.improvised_location
+                world_delta.transition_type = "connect_existing"
+                world_delta.target_location_id = matched_cand.location.id
+                world_delta.improvised_link = ImprovisedLinkSpec(
+                    to_location_id=matched_cand.location.id,
+                    entry_direction_label=imp_old.entry_direction_label,
+                    return_direction_label=imp_old.return_direction_label,
+                    compass_direction=imp_old.compass_direction,
+                    distance_meters=imp_old.distance_meters,
+                    speed_modifier=travel_cues.speed_modifier or DEFAULT_EDGE_SPEED_MODIFIER,
+                    distance_mode=imp_old.distance_mode,
+                    is_vertical=imp_old.is_vertical,
+                )
+                world_delta.improvised_location = None
+
     moved_neighbor: NeighborLocationView | None = None
-    if world_delta.transition_type == "move_existing" and world_delta.target_location_id in valid_neighbor_ids:
-        new_location_id = world_delta.target_location_id  # type: ignore[assignment]
-        moved_neighbor = next(
-            (n for n in neighbors if n.destination.id == new_location_id),
-            None,
+    traversed_location_ids: list[str] = []
+    min_travel_minutes = 0
+
+    if world_delta.transition_type == "move_existing":
+        if world_delta.target_location_id in valid_neighbor_ids:
+            new_location_id = world_delta.target_location_id  # type: ignore[assignment]
+            moved_neighbor = next(
+                (n for n in neighbors if n.destination.id == new_location_id),
+                None,
+            )
+            if moved_neighbor is not None:
+                eff_speed = normalize_edge_speed_modifier(moved_neighbor.speed_modifier)
+                raw_travel_minutes = moved_neighbor.distance_meters / (
+                    WALKING_METERS_PER_MINUTE * eff_speed
+                )
+                if raw_travel_minutes >= 0.5:
+                    min_travel_minutes = min(
+                        MAX_TURN_ELAPSED_MINUTES_SANITY,
+                        derive_travel_minutes(moved_neighbor.distance_meters, eff_speed),
+                    )
+        elif (
+            world_delta.target_location_id in candidate_by_id
+            and candidate_by_id[world_delta.target_location_id].shortest_path is not None
+        ):
+            cand = candidate_by_id[world_delta.target_location_id]
+            assert cand.shortest_path is not None
+            new_location_id = cand.location.id
+            traversed_location_ids = list(cand.shortest_path.path_node_ids)
+            min_travel_minutes = min(
+                MAX_TURN_ELAPSED_MINUTES_SANITY,
+                cand.shortest_path.total_travel_minutes,
+            )
+    elif world_delta.transition_type == "connect_existing":
+        target_conn_id = world_delta.target_location_id or (
+            world_delta.improvised_link.to_location_id if world_delta.improvised_link else None
         )
+        if target_conn_id in valid_neighbor_ids:
+            world_delta.transition_type = "move_existing"
+            world_delta.target_location_id = target_conn_id
+            world_delta.improvised_link = None
+            new_location_id = target_conn_id  # type: ignore[assignment]
+            moved_neighbor = next(
+                (n for n in neighbors if n.destination.id == new_location_id),
+                None,
+            )
+            if moved_neighbor is not None:
+                eff_speed = normalize_edge_speed_modifier(moved_neighbor.speed_modifier)
+                if moved_neighbor.distance_meters / (WALKING_METERS_PER_MINUTE * eff_speed) >= 0.5:
+                    min_travel_minutes = min(
+                        MAX_TURN_ELAPSED_MINUTES_SANITY,
+                        derive_travel_minutes(moved_neighbor.distance_meters, eff_speed),
+                    )
+        elif target_conn_id in candidate_by_id:
+            cand = candidate_by_id[target_conn_id]
+            if cand.has_hidden_secret_direct_edge and not gm_unlocked_spatial:
+                # Never duplicate/leak an unrevealed secret direct route
+                if cand.shortest_path is not None:
+                    world_delta.transition_type = "move_existing"
+                    world_delta.target_location_id = cand.location.id
+                    world_delta.improvised_link = None
+                    new_location_id = cand.location.id
+                    traversed_location_ids = list(cand.shortest_path.path_node_ids)
+                    min_travel_minutes = min(
+                        MAX_TURN_ELAPSED_MINUTES_SANITY,
+                        cand.shortest_path.total_travel_minutes,
+                    )
+                else:
+                    world_delta.transition_type = "stay"
+                    world_delta.target_location_id = None
+                    world_delta.improvised_link = None
+            else:
+                had_explicit_link = world_delta.improvised_link is not None
+                link_spec = (
+                    world_delta.improvised_link.model_copy()
+                    if world_delta.improvised_link is not None
+                    else ImprovisedLinkSpec(
+                        to_location_id=cand.location.id,
+                        entry_direction_label=f"Route to {cand.location.name}",
+                        return_direction_label=f"Back to {active_location.name}",
+                    )
+                )
+                link_spec.to_location_id = cand.location.id
+                if travel_cues.is_non_euclidean:
+                    link_spec.distance_mode = "non_euclidean"
+                elif link_spec.distance_mode == "flexible" and travel_cues.is_vertical:
+                    link_spec.is_vertical = True
+                if (
+                    abs(link_spec.speed_modifier - DEFAULT_EDGE_SPEED_MODIFIER) < 1e-6
+                    and travel_cues.speed_modifier is not None
+                ):
+                    link_spec.speed_modifier = travel_cues.speed_modifier
+                eff_speed = normalize_edge_speed_modifier(link_spec.speed_modifier)
+
+                # Align raw meters when LLM omitted ImprovisedLinkSpec
+                if not had_explicit_link:
+                    if travel_cues.distance_meters is not None:
+                        link_spec.distance_meters = travel_cues.distance_meters
+                    elif travel_cues.duration_minutes is not None:
+                        link_spec.distance_meters = max(
+                            1,
+                            min(
+                                MAX_EDGE_DISTANCE_METERS,
+                                int(
+                                    round(
+                                        travel_cues.duration_minutes
+                                        * WALKING_METERS_PER_MINUTE
+                                        * eff_speed
+                                    )
+                                ),
+                            ),
+                        )
+
+                # Apply 2D Geometry Clamping unless portal/vertical or disconnected component
+                if (
+                    normalize_edge_distance_mode(link_spec.distance_mode) != "non_euclidean"
+                    and not normalize_edge_is_vertical(link_spec.is_vertical)
+                    and cand.geometric_offset is not None
+                ):
+                    raw_requested_m = link_spec.distance_meters
+                    if (
+                        raw_requested_m == 100
+                        and travel_cues.duration_minutes is not None
+                        and abs(
+                            round(travel_cues.duration_minutes * WALKING_METERS_PER_MINUTE * eff_speed)
+                            - 100
+                        )
+                        > 25
+                    ):
+                        raw_requested_m = max(
+                            1,
+                            min(
+                                MAX_EDGE_DISTANCE_METERS,
+                                int(
+                                    round(
+                                        travel_cues.duration_minutes
+                                        * WALKING_METERS_PER_MINUTE
+                                        * eff_speed
+                                    )
+                                ),
+                            ),
+                        )
+                    geo_m = cand.geometric_offset.distance_meters
+                    if abs(raw_requested_m - geo_m) >= 25 or (
+                        geo_m > 0 and abs(raw_requested_m - geo_m) / geo_m > 0.10
+                    ):
+                        link_spec.clamped_from_meters = raw_requested_m
+                    link_spec.distance_meters = geo_m
+                    link_spec.compass_direction = normalize_compass_direction(
+                        cand.geometric_offset.bearing
+                    )
+                else:
+                    if travel_cues.distance_meters is not None and abs(
+                        link_spec.distance_meters - travel_cues.distance_meters
+                    ) > max(10, 0.25 * travel_cues.distance_meters):
+                        link_spec.distance_meters = travel_cues.distance_meters
+                    elif (
+                        travel_cues.duration_minutes is not None
+                        and link_spec.distance_mode != "non_euclidean"
+                        and not link_spec.is_vertical
+                    ):
+                        exp_m = max(
+                            1,
+                            min(
+                                MAX_EDGE_DISTANCE_METERS,
+                                int(
+                                    round(
+                                        travel_cues.duration_minutes
+                                        * WALKING_METERS_PER_MINUTE
+                                        * eff_speed
+                                    )
+                                ),
+                            ),
+                        )
+                        if (
+                            link_spec.distance_meters in (20, 50, 100)
+                            or link_spec.distance_meters < exp_m * 0.5
+                            or link_spec.distance_meters > exp_m * 2.0
+                        ):
+                            link_spec.distance_meters = exp_m
+
+                created_edge, _created = repo.add_improvised_link(
+                    world_id=world_id,
+                    from_location_id=active_location.id,
+                    to_location_id=cand.location.id,
+                    created_at_turn_id=completed_turn.id,
+                    spec=link_spec,
+                    valid_turn_ids=valid_turn_ids,
+                )
+                link_spec.distance_meters = created_edge.distance_meters
+                if created_edge.compass_direction is not None:
+                    link_spec.compass_direction = created_edge.compass_direction
+                world_delta.target_location_id = cand.location.id
+                world_delta.improvised_link = link_spec
+                new_location_id = cand.location.id
+                min_travel_minutes = min(
+                    MAX_TURN_ELAPSED_MINUTES_SANITY,
+                    derive_travel_minutes(link_spec.distance_meters, eff_speed),
+                )
     elif world_delta.transition_type == "improvise_new" and world_delta.improvised_location is not None:
+        imp_spec = world_delta.improvised_location.model_copy()
+        if travel_cues.is_non_euclidean and imp_spec.distance_mode == "flexible":
+            imp_spec.distance_mode = "non_euclidean"
+        if travel_cues.is_vertical and not imp_spec.is_vertical:
+            imp_spec.is_vertical = True
+        eff_speed = normalize_edge_speed_modifier(travel_cues.speed_modifier or DEFAULT_EDGE_SPEED_MODIFIER)
+        if travel_cues.distance_meters is not None:
+            if abs(imp_spec.distance_meters - travel_cues.distance_meters) > max(
+                10, 0.25 * travel_cues.distance_meters
+            ):
+                imp_spec.distance_meters = travel_cues.distance_meters
+        elif (
+            travel_cues.duration_minutes is not None
+            and imp_spec.distance_mode != "non_euclidean"
+            and not imp_spec.is_vertical
+        ):
+            expected_m = max(
+                1,
+                min(
+                    MAX_EDGE_DISTANCE_METERS,
+                    int(
+                        round(
+                            travel_cues.duration_minutes
+                            * WALKING_METERS_PER_MINUTE
+                            * eff_speed
+                        )
+                    ),
+                ),
+            )
+            if (
+                imp_spec.distance_meters in (20, 50, 100)
+                or imp_spec.distance_meters < expected_m * 0.5
+                or imp_spec.distance_meters > expected_m * 2.0
+            ):
+                imp_spec.distance_meters = expected_m
+
+        world_delta.improvised_location = imp_spec
         created_loc = repo.add_improvised_location(
             world_id=world_id,
             from_location_id=active_location.id,
             created_at_turn_id=completed_turn.id,
-            spec=world_delta.improvised_location,
+            spec=imp_spec,
             valid_turn_ids=valid_turn_ids,
         )
         new_location_id = created_loc.id
         world_delta.target_location_id = created_loc.id
-
-    # 2. Advance World Clock & Merge Scene Flags (anchoring movement to link speed/distance floor)
-    min_travel_minutes = 0
-    if moved_neighbor is not None:
-        eff_speed = normalize_edge_speed_modifier(moved_neighbor.speed_modifier)
-        raw_travel_minutes = moved_neighbor.distance_meters / (
-            WALKING_METERS_PER_MINUTE * eff_speed
-        )
-        if raw_travel_minutes >= 0.5:
+        raw_imp_min = imp_spec.distance_meters / (WALKING_METERS_PER_MINUTE * eff_speed)
+        if raw_imp_min >= 0.5:
             min_travel_minutes = min(
                 MAX_TURN_ELAPSED_MINUTES_SANITY,
-                derive_travel_minutes(moved_neighbor.distance_meters, eff_speed),
+                derive_travel_minutes(imp_spec.distance_meters, eff_speed),
             )
 
+    # 2. Advance World Clock & Merge Scene Flags (anchoring movement to link speed/distance floor)
     requested_elapsed_minutes = max(int(world_delta.elapsed_minutes), min_travel_minutes)
     new_timestamp = resolve_turn_timestamp(
         current_timestamp,
@@ -758,10 +1082,17 @@ async def run_phase5_post_turn_clerk(
                 prev_visited_containers=prev_visited_containers,
                 describe_on_first_visit=camp_rec.world_settings.describe_on_first_visit,
                 emit_media=camp_rec.world_settings.describe_on_first_visit,
-                extra_visited_location_ids=(
-                    [completed_turn.world_snapshot.active_location_id]
-                    if completed_turn.world_snapshot.active_location_id
-                    else []
+                extra_visited_location_ids=list(
+                    dict.fromkeys(
+                        [
+                            *(
+                                [completed_turn.world_snapshot.active_location_id]
+                                if completed_turn.world_snapshot.active_location_id
+                                else []
+                            ),
+                            *traversed_location_ids,
+                        ]
+                    )
                 ),
             )
         )
@@ -1502,11 +1833,13 @@ async def run_phase5_post_turn_clerk(
         )
 
     composite_post_turn = PostTurnStateDelta(
-        elapsed_minutes=turn_elapsed if moved_neighbor is not None else world_delta.elapsed_minutes,
-        new_world_timestamp=new_timestamp if moved_neighbor is not None and turn_elapsed >= min_travel_minutes else world_delta.new_world_timestamp,
+        elapsed_minutes=turn_elapsed if (min_travel_minutes > 0 or moved_neighbor is not None) else world_delta.elapsed_minutes,
+        new_world_timestamp=new_timestamp if ((min_travel_minutes > 0 or moved_neighbor is not None) and turn_elapsed >= min_travel_minutes) else world_delta.new_world_timestamp,
         transition_type=world_delta.transition_type,
         target_location_id=world_delta.target_location_id,
         improvised_location=world_delta.improvised_location,
+        improvised_link=world_delta.improvised_link,
+        traversed_location_ids=traversed_location_ids,
         notable_event_summary=world_delta.notable_event_summary,
         scene_flags_updated=world_delta.scene_flags_updated,
         scene_flags_removed=world_delta.scene_flags_removed,

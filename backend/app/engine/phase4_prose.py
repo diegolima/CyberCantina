@@ -97,7 +97,7 @@ def build_offline_simulated_prose(
 
     if is_solo:
         target_exit = neighbors[0] if neighbors else None
-        if pre_turn.spatial_intent == "move_known" and pre_turn.target_location_hint:
+        if pre_turn.spatial_intent in ("move_known", "connect_existing") and pre_turn.target_location_hint:
             return (
                 f"*You move out alone through the passage toward {pre_turn.target_location_hint}, "
                 f"leaving {active_location.name} behind in quiet solitude.*"
@@ -195,7 +195,7 @@ def build_offline_simulated_prose(
                 f"*{character.name} exhales slowly across {active_location.name} as the party disperses.*\n\n"
                 f"\"Then we're done traveling together. Watch yourself out there.\""
             )
-    elif pre_turn.spatial_intent == "move_known" and pre_turn.target_location_hint:
+    elif pre_turn.spatial_intent in ("move_known", "connect_existing") and pre_turn.target_location_hint:
         actor_cog = cogs_lookup.get(character.id) or established_cognition
         if actor_cog and actor_cog.travel_intent == "stay_behind":
             action_prose = (

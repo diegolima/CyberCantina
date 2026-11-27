@@ -11,6 +11,7 @@ import {
   Flag,
   Globe,
   Heart,
+  Link2,
   MapPin,
   Package,
   RefreshCw,
@@ -24,6 +25,7 @@ import {
   CampaignStateBundle,
   CharacterAgentDelta,
   ExtractedCharacterMemory,
+  ImprovisedLinkSpec,
   ImprovisedLocationSpec,
   Phase4TurnProgress,
   PhysicalStance,
@@ -31,6 +33,7 @@ import {
   formatPhysicalStateResetLabel,
   getPhysicalStanceMeta,
 } from "../../types";
+import { formatDistanceCompact } from "../../utils/spatialDistance";
 
 function renderPhysicalTransitionContent(
   prevStance: PhysicalStance,
@@ -138,6 +141,10 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
       postTurn?.target_location_id ?? provisional?.target_location_id;
     const improvised: ImprovisedLocationSpec | null =
       postTurn?.improvised_location ?? provisional?.improvised_location ?? null;
+    const improvisedLink: ImprovisedLinkSpec | null =
+      postTurn?.improvised_link ?? provisional?.improvised_link ?? null;
+    const traversedLocationIds: string[] =
+      postTurn?.traversed_location_ids ?? [];
 
     const fromLocation =
       parentTurn?.world_snapshot.active_location_id
@@ -327,18 +334,80 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
                     </span>
                   </div>
                 ) : transitionType === "move_existing" ? (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.82rem" }}>
-                    <MapPin size={13} color="var(--accent-cyan)" />
-                    <span>
-                      Departed {fromLocationName ? `from ${fromLocationName} ` : ""}to connected exit:{" "}
-                      <strong style={{ color: "var(--accent-cyan)" }}>
-                        {toLocation?.name || targetLocId}
-                      </strong>
-                    </span>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.82rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <MapPin size={13} color="var(--accent-cyan)" />
+                      <span>
+                        Departed {fromLocationName ? `from ${fromLocationName} ` : ""}to connected exit:{" "}
+                        <strong style={{ color: "var(--accent-cyan)" }}>
+                          {toLocation?.name || targetLocId}
+                        </strong>
+                      </span>
+                    </div>
+                    {traversedLocationIds.length > 2 && (
+                      <div
+                        style={{
+                          fontSize: "0.74rem",
+                          color: "var(--text-secondary)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <span>Path:</span>
+                        <span>
+                          {traversedLocationIds
+                            .map(
+                              (lid) =>
+                                bundle.visible_locations.find((l) => l.id === lid)
+                                  ?.name || lid
+                            )
+                            .join(" → ")}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ) : transitionType === "connect_existing" ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.82rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <Link2 size={13} color="var(--accent-cyan)" />
+                      <span>
+                        Linked direct route {fromLocationName ? `from ${fromLocationName} ` : ""}to{" "}
+                        <strong style={{ color: "var(--accent-cyan)" }}>
+                          {toLocation?.name || targetLocId}
+                        </strong>
+                      </span>
+                      {improvisedLink && (
+                        <span className="badge" style={{ fontSize: "0.68rem" }}>
+                          {improvisedLink.compass_direction} ·{" "}
+                          {formatDistanceCompact(improvisedLink.distance_meters)}
+                        </span>
+                      )}
+                      {improvisedLink?.distance_mode === "non_euclidean" && (
+                        <span className="badge" style={{ fontSize: "0.68rem", color: "#d8b4fe" }}>
+                          Non-Euclidean
+                        </span>
+                      )}
+                      {improvisedLink?.is_vertical && (
+                        <span className="badge" style={{ fontSize: "0.68rem", color: "#6ee7b7" }}>
+                          Vertical
+                        </span>
+                      )}
+                      {improvisedLink?.clamped_from_meters != null && (
+                        <span
+                          className="badge"
+                          style={{ fontSize: "0.68rem", color: "var(--accent-amber)" }}
+                        >
+                          Clamped to geometry (from{" "}
+                          {formatDistanceCompact(improvisedLink.clamped_from_meters)})
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.82rem" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <Sparkles size={13} color="var(--accent-amber)" />
                       <span>
                         Improvised new adjacent location:{" "}
@@ -346,6 +415,22 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
                           {improvised?.name || "New Chamber"}
                         </strong>
                       </span>
+                      {improvised && (
+                        <span className="badge" style={{ fontSize: "0.68rem" }}>
+                          {improvised.compass_direction} ·{" "}
+                          {formatDistanceCompact(improvised.distance_meters)}
+                        </span>
+                      )}
+                      {improvised?.is_vertical && (
+                        <span className="badge" style={{ fontSize: "0.68rem", color: "#6ee7b7" }}>
+                          Vertical
+                        </span>
+                      )}
+                      {improvised?.distance_mode === "non_euclidean" && (
+                        <span className="badge" style={{ fontSize: "0.68rem", color: "#d8b4fe" }}>
+                          Non-Euclidean
+                        </span>
+                      )}
                     </div>
                     {improvised?.description && (
                       <div

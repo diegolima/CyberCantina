@@ -11,6 +11,11 @@ from app.engine.llm_client import llm_client
 from app.engine.telemetry import telemetry_phase_scope
 from app.engine.mentions import DecomposedUserMessage, MentionTargetScope, decompose_user_message
 from app.engine.parties import build_party_invite_roll_directives
+from app.engine.spatial_geometry import (
+    CandidateKnownLocation,
+    format_candidate_known_locations_block,
+    normalize_location_name_key,
+)
 from app.prompts import get_default_prompt, render_template
 from app.schemas.character import (
     CharacterRecord,
@@ -613,6 +618,7 @@ def _build_heuristic_llm_output(
     already_unlocked_keys: set[str] | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
     party_action: PartyActionSpec | None = None,
+    other_known_locations: list[CandidateKnownLocation] | None = None,
 ) -> PreTurnLLMOutput:
     """Deterministic extractor producing structured PreTurnLLMOutput without invoking RNG."""
     msg_lower = user_message.lower()
@@ -645,17 +651,81 @@ def _build_heuristic_llm_output(
     spatial_intent = "stay"
     target_hint: str | None = None
     if party_action is None:
-        move_verbs = ("go to", "head to", "walk into", "step into", "enter", "head out", "go through", "up the", "down to", "follow me to", "backroom", "clinic", "alley", "mezzanine", "tunnels", "hatch")
+        move_verbs = (
+            "go to",
+            "head to",
+            "walk to",
+            "walk into",
+            "walk back",
+            "go back",
+            "head back",
+            "return to",
+            "step into",
+            "enter",
+            "head out",
+            "go through",
+            "up the",
+            "down to",
+            "follow me to",
+            "walk ",
+            "head ",
+            "sprint ",
+            "run ",
+            "climb ",
+            "descend ",
+            "ascend ",
+            "crawl ",
+            "backroom",
+            "clinic",
+            "alley",
+            "mezzanine",
+            "tunnels",
+            "hatch",
+        )
+        _GENERIC_DIR_STOPWORDS = {
+            "back", "from", "into", "onto", "toward", "towards", "door", "doorway",
+            "passage", "route", "path", "return", "came", "west", "east", "north", "south",
+        }
         if any(v in msg_lower for v in move_verbs):
             for nb in neighbors:
                 dest_words = [w.lower() for w in nb.destination.name.split() if len(w) > 3]
-                dir_words = [w.lower() for w in nb.direction_label.split() if len(w) > 3]
-                if any(w in msg_lower for w in dest_words + dir_words):
+                if nb.destination.name.lower() in msg_lower or any(
+                    re.search(rf"\b{re.escape(w)}\b", msg_lower) for w in dest_words
+                ):
                     spatial_intent = "move_known"
                     target_hint = nb.destination.name
                     break
+            if spatial_intent == "stay" and other_known_locations:
+                is_retrace = any(
+                    kw in msg_lower
+                    for kw in ("back through", "retrace", "return along", "via the")
+                )
+                for cand in other_known_locations:
+                    norm_cand = normalize_location_name_key(cand.location.name)
+                    if (
+                        cand.location.name.lower() in msg_lower
+                        or (len(norm_cand) >= 3 and re.search(rf"\b{re.escape(norm_cand)}\b", msg_lower))
+                    ):
+                        if is_retrace and cand.shortest_path is not None:
+                            spatial_intent = "move_known"
+                        else:
+                            spatial_intent = "connect_existing"
+                        target_hint = cand.location.name
+                        break
+            if spatial_intent == "stay":
+                for nb in neighbors:
+                    dir_words = [
+                        w.lower()
+                        for w in nb.direction_label.split()
+                        if len(w) > 3 and w.lower() not in _GENERIC_DIR_STOPWORDS
+                    ]
+                    if any(w in msg_lower for w in dir_words):
+                        spatial_intent = "move_known"
+                        target_hint = nb.destination.name
+                        break
             if spatial_intent == "stay" and re.search(
-                r"\b(kick open|step into the|head into the|open the door to|explore the)\b",
+                r"\b(kick open|step into the|head into the|open the door to|explore the|"
+                r"(?:walk|head|run|sprint|step|climb|descend|ascend|crawl)[^.\n]{0,40}\binto\s+(?:the|an?))\b",
                 msg_lower,
             ):
                 spatial_intent = "explore_new"
@@ -879,6 +949,7 @@ async def run_phase1_pre_analysis(
     party_action: PartyActionSpec | None = None,
     is_search_action: bool = False,
     search_focus: str | None = None,
+    other_known_locations: list[CandidateKnownLocation] | None = None,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
     original_dice_mode = dice_mode
@@ -1007,11 +1078,16 @@ async def run_phase1_pre_analysis(
     system_prompt = render_template(
         prompt_template or get_default_prompt("clerk_pre_turn_system")
     )
+    other_known_block = (
+        f"\nOther Known Locations (not directly linked):\n{format_candidate_known_locations_block(other_known_locations, include_ids=False)}"
+        if other_known_locations
+        else ""
+    )
     user_prompt = (
         f"Characters Present in Room ({active_location.name}):\n{present_desc}\n"
         f"Previous Turn Speaker ID: {previous_speaker_id or ('__solo__' if is_solo else character.id)}\n"
         f"Current Location: {active_location.name} ({active_location.summary})\n"
-        f"Adjacent Exits: {neighbor_desc}\n"
+        f"Adjacent Exits: {neighbor_desc}{other_known_block}\n"
         f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}{party_action_hint}{persona_prompt_hint}{mention_hint}\n\n"
         f"User Message:\n{user_message}"
     )
@@ -1043,6 +1119,7 @@ async def run_phase1_pre_analysis(
             already_unlocked_keys=already_unlocked_keys,
             decomposed_message=decomp,
             party_action=party_action,
+            other_known_locations=other_known_locations,
         )
         analysis = PreTurnAnalysis(**raw_output.model_dump())
 

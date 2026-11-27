@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import re
 
+from app.engine.spatial_geometry import (
+    CandidateKnownLocation,
+    extract_travel_cues,
+    normalize_location_name_key,
+)
 from app.engine.world_clock import (
     advance_world_timestamp,
     extract_time_hint_minutes,
@@ -16,6 +21,7 @@ from app.schemas.physical import (
     extract_heuristic_physical_state,
 )
 from app.schemas.turn import (
+    ImprovisedLinkSpec,
     ImprovisedLocationSpec,
     PostTurnStateDelta,
     PreTurnAnalysis,
@@ -23,8 +29,11 @@ from app.schemas.turn import (
     WorldPostTurnDelta,
 )
 from app.schemas.world import (
+    DEFAULT_EDGE_SPEED_MODIFIER,
     DEFAULT_EXTERIOR_DISTANCE_METERS,
     DEFAULT_INTERIOR_DISTANCE_METERS,
+    MAX_EDGE_DISTANCE_METERS,
+    WALKING_METERS_PER_MINUTE,
     LocationNode,
     LocationProp,
     NeighborLocationView,
@@ -46,6 +55,7 @@ def heuristic_post_turn_delta(
     current_timestamp: str | None = None,
     present_characters: list[CharacterRecord] | None = None,
     active_character: CharacterRecord | None = None,
+    other_known_locations: list[CandidateKnownLocation] | None = None,
 ) -> PostTurnStateDelta:
     """Deterministic fallback state extractor when the Auxiliary Clerk endpoint is offline."""
     delta = _heuristic_spatial_and_inventory_delta(
@@ -55,6 +65,7 @@ def heuristic_post_turn_delta(
         active_location=active_location,
         neighbors=neighbors,
         current_inventory=current_inventory,
+        other_known_locations=other_known_locations,
     )
     # Honor explicit time cues in the user's message (e.g. "it's 5am", "slept until morning").
     if current_timestamp is not None:
@@ -75,6 +86,27 @@ def heuristic_post_turn_delta(
     return delta
 
 
+def _match_candidate_location(
+    candidates: list[CandidateKnownLocation] | None,
+    pre_turn: PreTurnAnalysis,
+    user_message: str,
+) -> CandidateKnownLocation | None:
+    if not candidates:
+        return None
+    hint = normalize_location_name_key(pre_turn.target_location_hint or "")
+    msg_low = user_message.lower()
+    if hint:
+        for cand in candidates:
+            norm = normalize_location_name_key(cand.location.name)
+            if norm == hint or hint in norm or cand.location.id == pre_turn.target_location_hint:
+                return cand
+    for cand in candidates:
+        norm = normalize_location_name_key(cand.location.name)
+        if cand.location.name.lower() in msg_low or (len(norm) >= 3 and norm in msg_low):
+            return cand
+    return None
+
+
 def _heuristic_spatial_and_inventory_delta(
     *,
     user_message: str,
@@ -83,15 +115,17 @@ def _heuristic_spatial_and_inventory_delta(
     active_location: LocationNode,
     neighbors: list[NeighborLocationView],
     current_inventory: list[str] | None = None,
+    other_known_locations: list[CandidateKnownLocation] | None = None,
 ) -> PostTurnStateDelta:
     """Deterministic spatial transition + inventory extraction (clock defaults only)."""
     combined = f"{user_message} {raw_prose}".lower()
+    cues = extract_travel_cues(f"{user_message}\n{raw_prose}")
     inv_added, inv_removed = _extract_heuristic_inventory_delta(
         user_message, raw_prose, current_inventory
     )
 
-    # Check if movement to a known neighbor occurred
-    if pre_turn.spatial_intent == "move_known":
+    # Check if movement to a known neighbor (or multi-hop / connect_existing candidate) occurred
+    if pre_turn.spatial_intent in ("move_known", "connect_existing"):
         for nb in neighbors:
             if (
                 pre_turn.target_location_hint
@@ -111,6 +145,75 @@ def _heuristic_spatial_and_inventory_delta(
                     inventory_added=inv_added,
                     inventory_removed=inv_removed,
                 )
+
+        cand = _match_candidate_location(other_known_locations, pre_turn, user_message)
+        if cand is not None:
+            is_retrace = pre_turn.spatial_intent == "move_known" or any(
+                kw in combined
+                for kw in ("back through", "retrace", "return along", "via the")
+            )
+            if is_retrace and cand.shortest_path is not None:
+                return PostTurnStateDelta(
+                    elapsed_minutes=min(
+                        MAX_TURN_ELAPSED_MINUTES_SANITY,
+                        max(2, cand.shortest_path.total_travel_minutes),
+                    ),
+                    transition_type="move_existing",
+                    target_location_id=cand.location.id,
+                    traversed_location_ids=list(cand.shortest_path.path_node_ids),
+                    notable_event_summary=(
+                        f"Returned from {active_location.name} to {cand.location.name}."
+                    ),
+                    scene_flags_updated=[f"At {cand.location.name}"],
+                    inventory_added=inv_added,
+                    inventory_removed=inv_removed,
+                )
+            eff_speed = cues.speed_modifier or DEFAULT_EDGE_SPEED_MODIFIER
+            raw_m = (
+                cues.distance_meters
+                if cues.distance_meters is not None
+                else (
+                    max(1, min(MAX_EDGE_DISTANCE_METERS, int(round(cues.duration_minutes * WALKING_METERS_PER_MINUTE * eff_speed))))
+                    if cues.duration_minutes is not None
+                    else DEFAULT_EXTERIOR_DISTANCE_METERS
+                )
+            )
+            clamped_from: int | None = None
+            final_m = raw_m
+            final_dir = normalize_compass_direction(None, f"{user_message} {raw_prose}")
+            if (
+                not cues.is_non_euclidean
+                and not cues.is_vertical
+                and cand.geometric_offset is not None
+            ):
+                final_m = cand.geometric_offset.distance_meters
+                final_dir = cand.geometric_offset.bearing
+                if abs(raw_m - final_m) >= 25:
+                    clamped_from = raw_m
+            elapsed_min = derive_travel_minutes(final_m, eff_speed)
+            return PostTurnStateDelta(
+                elapsed_minutes=min(MAX_TURN_ELAPSED_MINUTES_SANITY, elapsed_min),
+                transition_type="connect_existing",
+                target_location_id=cand.location.id,
+                improvised_link=ImprovisedLinkSpec(
+                    to_location_id=cand.location.id,
+                    entry_direction_label=f"Direct route to {cand.location.name}",
+                    return_direction_label=f"Back to {active_location.name}",
+                    compass_direction=final_dir,
+                    distance_meters=final_m,
+                    speed_modifier=eff_speed,
+                    distance_mode="non_euclidean" if cues.is_non_euclidean else "flexible",
+                    is_vertical=cues.is_vertical,
+                    clamped_from_meters=clamped_from,
+                ),
+                notable_event_summary=(
+                    f"Opened a direct route from {active_location.name} to {cand.location.name}."
+                ),
+                scene_flags_updated=[f"At {cand.location.name}"],
+                inventory_added=inv_added,
+                inventory_removed=inv_removed,
+            )
+
         # Fallback to matching neighbor words in combined text
         for nb in neighbors:
             dest_words = [w.lower() for w in nb.destination.name.split() if len(w) > 3]
@@ -142,13 +245,35 @@ def _heuristic_spatial_and_inventory_delta(
         inferred_dir = normalize_compass_direction(None, f"{user_message} {raw_prose}")
         is_exterior_heuristic = bool(
             re.search(
-                r"\b(step(?:s|ped)?\s+outside|exit(?:s|ed)?\s+(?:into|to|the)|out\s+into\s+the\s+street|outside\s+the\s+(?:building|club|bar|tavern|compound)|onto\s+the\s+(?:street|road|alley|plaza))\b",
+                r"\b(step(?:s|ped)?\s+outside|exit(?:s|ed)?\s+(?:into|to|the)|out\s+into\s+the\s+street|outside\s+the\s+(?:building|club|bar|tavern|compound)|onto\s+the\s+(?:street|road|alley|plaza)|into\s+the\s+street)\b",
                 f"{user_message} {raw_prose}",
                 re.I,
             )
         )
+        eff_speed = cues.speed_modifier or DEFAULT_EDGE_SPEED_MODIFIER
+        if cues.distance_meters is not None:
+            imp_dist = cues.distance_meters
+        elif cues.duration_minutes is not None:
+            imp_dist = max(
+                1,
+                min(
+                    MAX_EDGE_DISTANCE_METERS,
+                    int(round(cues.duration_minutes * WALKING_METERS_PER_MINUTE * eff_speed)),
+                ),
+            )
+        else:
+            imp_dist = (
+                DEFAULT_EXTERIOR_DISTANCE_METERS
+                if is_exterior_heuristic
+                else DEFAULT_INTERIOR_DISTANCE_METERS
+            )
+        imp_elapsed = (
+            cues.duration_minutes
+            if cues.duration_minutes is not None
+            else derive_travel_minutes(imp_dist, eff_speed)
+        )
         return PostTurnStateDelta(
-            elapsed_minutes=4,
+            elapsed_minutes=min(MAX_TURN_ELAPSED_MINUTES_SANITY, max(1, imp_elapsed)),
             transition_type="improvise_new",
             improvised_location=ImprovisedLocationSpec(
                 name=room_name,
@@ -161,12 +286,10 @@ def _heuristic_spatial_and_inventory_delta(
                 entry_direction_label=f"Passage to {room_name}",
                 return_direction_label=f"Doorway back to {active_location.name}",
                 compass_direction=inferred_dir,
-                distance_meters=(
-                    DEFAULT_EXTERIOR_DISTANCE_METERS
-                    if is_exterior_heuristic
-                    else DEFAULT_INTERIOR_DISTANCE_METERS
-                ),
+                distance_meters=imp_dist,
                 is_exterior=is_exterior_heuristic,
+                distance_mode="non_euclidean" if cues.is_non_euclidean else "flexible",
+                is_vertical=cues.is_vertical,
             ),
             notable_event_summary=f"Discovered and entered {room_name} from {active_location.name}.",
             scene_flags_updated=[f"Discovered {room_name}"],
@@ -274,6 +397,7 @@ def heuristic_world_post_turn_delta(
     prev_player_context: str = "",
     visible_location_props: list[LocationProp] | None = None,
     present_characters: list[CharacterRecord] | None = None,
+    other_known_locations: list[CandidateKnownLocation] | None = None,
 ) -> WorldPostTurnDelta:
     """Deterministic fallback global world state extractor (clock, spatial graph, scene flags)."""
     legacy = _heuristic_spatial_and_inventory_delta(
@@ -283,6 +407,7 @@ def heuristic_world_post_turn_delta(
         active_location=active_location,
         neighbors=neighbors,
         current_inventory=None,
+        other_known_locations=other_known_locations,
     )
     new_ts: str | None = None
     elapsed = (
@@ -341,6 +466,7 @@ def heuristic_world_post_turn_delta(
         transition_type=legacy.transition_type,
         target_location_id=legacy.target_location_id,
         improvised_location=legacy.improvised_location,
+        improvised_link=legacy.improvised_link,
         notable_event_summary=legacy.notable_event_summary,
         scene_flags_updated=legacy.scene_flags_updated,
         scene_flags_removed=legacy.scene_flags_removed,
