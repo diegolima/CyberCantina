@@ -404,12 +404,23 @@ function getVisibleEdges(
   return [...edges];
 }
 
+interface VirtualPortalOffset {
+  u: string;
+  v: string;
+  dx: number;
+  dy: number;
+}
+
 interface ScopedSolverContext {
   scopeContainerId: string | null;
   mappedIdByLocationId: Map<string, string>;
+  ownerChildByLocId: Map<string, string | null>;
+  portalsByChildContainer: Map<string, string[]>;
+  expandedChildContainerIds: Set<string>;
   directLocationIds: Set<string>;
   nodeIds: string[];
   pairs: ReducedPair[];
+  virtualOffsets: VirtualPortalOffset[];
   uf: UnionFind;
   dofByNode: Map<string, string>;
   nodeIdsByDof: Map<string, string[]>;
@@ -420,17 +431,18 @@ interface ScopedSolverContext {
   dofPositions: Map<string, { x: number; y: number }>;
 }
 
-function buildReducedPairsForScope(params: {
+function resolveChildContainerMap(params: {
   scopeContainerId: string | null;
   locations: readonly LocationNode[];
   containers: readonly LocationContainer[];
   visibleEdges: readonly LocationEdge[];
   excludedSubtreeContainerIds: Set<string>;
+  focusLocationIds?: Set<string>;
 }): {
-  mappedIdByLocationId: Map<string, string>;
-  directLocationIds: Set<string>;
-  nodeIds: string[];
-  pairs: ReducedPair[];
+  contById: Map<string, LocationContainer>;
+  childContainers: LocationContainer[];
+  ownerChildByLocId: Map<string, string | null>;
+  portalsByChildContainer: Map<string, string[]>;
 } {
   const {
     scopeContainerId,
@@ -438,6 +450,7 @@ function buildReducedPairsForScope(params: {
     containers,
     visibleEdges,
     excludedSubtreeContainerIds,
+    focusLocationIds,
   } = params;
   const contById = new Map(containers.map((c) => [c.id, c]));
   const childContainers = containers.filter(
@@ -459,40 +472,149 @@ function buildReducedPairsForScope(params: {
     return null;
   };
 
+  const ownerChildByLocId = new Map<string, string | null>();
+  for (const loc of locations) {
+    const locCont =
+      loc.container_id && contById.has(loc.container_id) ? loc.container_id : null;
+    if (locCont && excludedSubtreeContainerIds.has(locCont)) {
+      continue;
+    }
+    if (locCont === scopeContainerId) {
+      ownerChildByLocId.set(loc.id, null);
+    } else {
+      const childCid = resolveChildUnderScope(locCont);
+      if (childCid) {
+        ownerChildByLocId.set(loc.id, childCid);
+      }
+    }
+  }
+
+  const portalSetsByChild = new Map<string, Set<string>>();
+  for (const c of childContainers) {
+    portalSetsByChild.set(c.id, new Set<string>());
+  }
+
+  for (const edge of visibleEdges) {
+    if (normalizeEdgeDistanceMode(edge.distance_mode) === "non_euclidean") {
+      continue;
+    }
+    const cFrom = ownerChildByLocId.get(edge.from_location_id);
+    const cTo = ownerChildByLocId.get(edge.to_location_id);
+    if (cFrom === undefined || cTo === undefined || cFrom === cTo) continue;
+    if (cFrom !== null) portalSetsByChild.get(cFrom)?.add(edge.from_location_id);
+    if (cTo !== null) portalSetsByChild.get(cTo)?.add(edge.to_location_id);
+  }
+
+  if (focusLocationIds) {
+    for (const locId of focusLocationIds) {
+      const ownerChild = ownerChildByLocId.get(locId);
+      if (ownerChild) {
+        portalSetsByChild.get(ownerChild)?.add(locId);
+      }
+    }
+  }
+
+  const portalsByChildContainer = new Map<string, string[]>();
+  for (const [cid, set] of portalSetsByChild.entries()) {
+    portalsByChildContainer.set(
+      cid,
+      Array.from(set).sort((a, b) => a.localeCompare(b))
+    );
+  }
+
+  return {
+    contById,
+    childContainers,
+    ownerChildByLocId,
+    portalsByChildContainer,
+  };
+}
+
+function buildReducedPairsForScope(params: {
+  scopeContainerId: string | null;
+  locations: readonly LocationNode[];
+  containers: readonly LocationContainer[];
+  visibleEdges: readonly LocationEdge[];
+  excludedSubtreeContainerIds: Set<string>;
+  expandedChildContainerIds?: Set<string>;
+  focusLocationIds?: Set<string>;
+}): {
+  mappedIdByLocationId: Map<string, string>;
+  ownerChildByLocId: Map<string, string | null>;
+  portalsByChildContainer: Map<string, string[]>;
+  directLocationIds: Set<string>;
+  nodeIds: string[];
+  pairs: ReducedPair[];
+} {
+  const {
+    scopeContainerId,
+    locations,
+    containers,
+    visibleEdges,
+    excludedSubtreeContainerIds,
+    expandedChildContainerIds,
+    focusLocationIds,
+  } = params;
+
+  const {
+    childContainers,
+    ownerChildByLocId,
+    portalsByChildContainer,
+  } = resolveChildContainerMap({
+    scopeContainerId,
+    locations,
+    containers,
+    visibleEdges,
+    excludedSubtreeContainerIds,
+    focusLocationIds,
+  });
+
+  const portalSetByChild = new Map<string, Set<string>>();
+  for (const [cid, arr] of portalsByChildContainer.entries()) {
+    portalSetByChild.set(cid, new Set(arr));
+  }
+
   const mappedIdByLocationId = new Map<string, string>();
   const directLocationIds = new Set<string>();
   const nodeIdSet = new Set<string>();
 
   for (const child of childContainers) {
-    const cid = `cont:${child.id}`;
-    nodeIdSet.add(cid);
+    if (!expandedChildContainerIds?.has(child.id)) {
+      nodeIdSet.add(`cont:${child.id}`);
+    }
   }
 
   for (const loc of locations) {
-    const locCont = loc.container_id && contById.has(loc.container_id) ? loc.container_id : null;
-    if (locCont && excludedSubtreeContainerIds.has(locCont)) {
-      continue;
-    }
-    if (locCont === scopeContainerId) {
+    const ownerChild = ownerChildByLocId.get(loc.id);
+    if (ownerChild === undefined) continue;
+    if (ownerChild === null) {
       mappedIdByLocationId.set(loc.id, loc.id);
       directLocationIds.add(loc.id);
       nodeIdSet.add(loc.id);
     } else {
-      const childCid = resolveChildUnderScope(locCont);
-      if (childCid) {
-        const mapped = `cont:${childCid}`;
+      const isExpandedChild = expandedChildContainerIds?.has(ownerChild) ?? false;
+      const isPortal = portalSetByChild.get(ownerChild)?.has(loc.id) ?? false;
+      if (isExpandedChild && isPortal) {
+        mappedIdByLocationId.set(loc.id, loc.id);
+        nodeIdSet.add(loc.id);
+      } else {
+        const mapped = `cont:${ownerChild}`;
         mappedIdByLocationId.set(loc.id, mapped);
         nodeIdSet.add(mapped);
       }
     }
   }
 
-  // Group edges by unordered mapped endpoint pair (for collapsed L1 containers, keep per physical raw pair unless collapsed)
+  // Group edges by unordered mapped endpoint pair (never leaking internal same-child edges)
   const edgeIndexById = new Map<string, number>();
   visibleEdges.forEach((e, idx) => edgeIndexById.set(e.id, idx));
 
   const pairGroups = new Map<string, LocationEdge[]>();
   for (const edge of visibleEdges) {
+    const cFrom = ownerChildByLocId.get(edge.from_location_id);
+    const cTo = ownerChildByLocId.get(edge.to_location_id);
+    if (cFrom === undefined || cTo === undefined) continue;
+    if (cFrom !== null && cFrom === cTo) continue;
     const mFrom = mappedIdByLocationId.get(edge.from_location_id);
     const mTo = mappedIdByLocationId.get(edge.to_location_id);
     if (!mFrom || !mTo || mFrom === mTo) continue;
@@ -611,15 +733,83 @@ function buildReducedPairsForScope(params: {
 
   return {
     mappedIdByLocationId,
+    ownerChildByLocId,
+    portalsByChildContainer,
     directLocationIds,
     nodeIds: Array.from(nodeIdSet).sort((a, b) => a.localeCompare(b)),
     pairs,
   };
 }
 
+function computeChildPortalOffsets(params: {
+  expandedChildContainerIds: Set<string>;
+  portalsByChildContainer: Map<string, string[]>;
+  containers: readonly LocationContainer[];
+  locations: readonly LocationNode[];
+  visibleEdges: readonly LocationEdge[];
+  depth: number;
+}): VirtualPortalOffset[] {
+  const {
+    expandedChildContainerIds,
+    portalsByChildContainer,
+    containers,
+    locations,
+    visibleEdges,
+    depth,
+  } = params;
+  if (expandedChildContainerIds.size === 0 || depth >= MAX_RECURSIVE_DEPTH) {
+    return [];
+  }
+  const offsets: VirtualPortalOffset[] = [];
+  for (const childCid of Array.from(expandedChildContainerIds).sort((a, b) =>
+    a.localeCompare(b)
+  )) {
+    const portalLocIds = portalsByChildContainer.get(childCid) ?? [];
+    if (portalLocIds.length < 2) continue;
+    const internalCtx = solveScopeLayoutInternal({
+      scopeContainerId: childCid,
+      containers,
+      locations,
+      visibleEdges,
+      excludedSubtreeContainerIds: new Set<string>(),
+      depth: depth + 1,
+      skipAnchors: true,
+      focusLocationIds: new Set(portalLocIds),
+    });
+
+    const byComp = new Map<string, Array<{ locId: string; x: number; y: number }>>();
+    for (const locId of portalLocIds) {
+      const mapped = internalCtx.mappedIdByLocationId.get(locId);
+      const dof = mapped ? internalCtx.dofByNode.get(mapped) : undefined;
+      const pt = dof ? internalCtx.dofPositions.get(dof) : undefined;
+      const comp = dof ? internalCtx.componentByDof.get(dof) : undefined;
+      if (!dof || !pt || !comp) continue;
+      const arr = byComp.get(comp) ?? [];
+      arr.push({ locId, x: pt.x, y: pt.y });
+      byComp.set(comp, arr);
+    }
+
+    for (const group of byComp.values()) {
+      if (group.length < 2) continue;
+      const root = group[0];
+      for (let i = 1; i < group.length; i++) {
+        const other = group[i];
+        offsets.push({
+          u: root.locId,
+          v: other.locId,
+          dx: other.x - root.x,
+          dy: other.y - root.y,
+        });
+      }
+    }
+  }
+  return offsets;
+}
+
 function solvePriorityBasisPositions(params: {
   nodeIds: string[];
   pairs: ReducedPair[];
+  virtualOffsets?: VirtualPortalOffset[];
   uf: UnionFind;
   dofByNode: Map<string, string>;
   pinnedDofCoords: Map<string, { x: number; y: number }>;
@@ -638,6 +828,7 @@ function solvePriorityBasisPositions(params: {
   const {
     nodeIds,
     pairs,
+    virtualOffsets = [],
     uf,
     dofByNode,
     pinnedDofCoords,
@@ -664,6 +855,13 @@ function solvePriorityBasisPositions(params: {
     const du = dofByNode.get(p.u)!;
     const dv = dofByNode.get(p.v)!;
     if (du === dv) continue;
+    adj.get(du)?.push(dv);
+    adj.get(dv)?.push(du);
+  }
+  for (const vo of virtualOffsets) {
+    const du = dofByNode.get(vo.u);
+    const dv = dofByNode.get(vo.v);
+    if (!du || !dv || du === dv) continue;
     adj.get(du)?.push(dv);
     adj.get(dv)?.push(du);
   }
@@ -738,11 +936,42 @@ function solvePriorityBasisPositions(params: {
   }
 
   // Grow Prim-style priority spanning forest (anchors & oldest established links take precedence)
+  // Propagate internal portal-to-portal offsets across expanded child containers immediately whenever one portal is placed
+  const propagateVirtualOffsets = (): boolean => {
+    if (virtualOffsets.length === 0) return false;
+    let placedAny = false;
+    let loopMoved = true;
+    while (loopMoved) {
+      loopMoved = false;
+      for (const vo of virtualOffsets) {
+        const du = dofByNode.get(vo.u);
+        const dv = dofByNode.get(vo.v);
+        if (!du || !dv || du === dv) continue;
+        const pu = placed.get(du);
+        const pv = placed.get(dv);
+        if (pu && !pv) {
+          placed.set(dv, { x: pu.x + vo.dx, y: pu.y + vo.dy });
+          clusterUf.union(du, dv);
+          placedAny = true;
+          loopMoved = true;
+        } else if (!pu && pv) {
+          placed.set(du, { x: pv.x - vo.dx, y: pv.y - vo.dy });
+          clusterUf.union(du, dv);
+          placedAny = true;
+          loopMoved = true;
+        }
+      }
+    }
+    return placedAny;
+  };
+
+  propagateVirtualOffsets();
+
   const basisPairKeys = new Set<string>();
   const basisPairs: ReducedPair[] = [];
   let progressed = true;
   while (progressed) {
-    progressed = false;
+    progressed = propagateVirtualOffsets();
     for (const p of orderedPairs) {
       if (basisPairKeys.has(p.pairKey)) continue;
       const du = dofByNode.get(p.u)!;
@@ -758,6 +987,7 @@ function solvePriorityBasisPositions(params: {
         clusterUf.union(du, dv);
         basisPairKeys.add(p.pairKey);
         basisPairs.push(p);
+        propagateVirtualOffsets();
         progressed = true;
         break;
       }
@@ -769,6 +999,7 @@ function solvePriorityBasisPositions(params: {
         clusterUf.union(du, dv);
         basisPairKeys.add(p.pairKey);
         basisPairs.push(p);
+        propagateVirtualOffsets();
         progressed = true;
         break;
       }
@@ -797,9 +1028,13 @@ function solvePriorityBasisPositions(params: {
     const bridgeCtx: ScopedSolverContext = {
       scopeContainerId,
       mappedIdByLocationId,
+      ownerChildByLocId: new Map<string, string | null>(),
+      portalsByChildContainer: new Map<string, string[]>(),
+      expandedChildContainerIds: new Set<string>(),
       directLocationIds,
       nodeIds,
       pairs: [...basisPairs, ...lateralCrossPinBridges],
+      virtualOffsets,
       uf,
       dofByNode,
       nodeIdsByDof,
@@ -821,7 +1056,45 @@ function solvePriorityBasisPositions(params: {
   return { dofPositions: placed, componentByDof };
 }
 
-function solveScopeLayoutInternal(params: {
+function countChildBoundaryIssues(
+  ctx: ScopedSolverContext,
+  childContainerId: string
+): { errors: number; warnings: number } {
+  let errors = 0;
+  let warnings = 0;
+  for (const p of ctx.pairs) {
+    if (p.distanceMode === "non_euclidean" || p.isVertical) continue;
+    const cFrom = ctx.ownerChildByLocId.get(p.rawU);
+    const cTo = ctx.ownerChildByLocId.get(p.rawV);
+    if (cFrom !== childContainerId && cTo !== childContainerId) continue;
+
+    const du = ctx.dofByNode.get(p.u)!;
+    const dv = ctx.dofByNode.get(p.v)!;
+    const pu = ctx.dofPositions.get(du) ?? { x: 0, y: 0 };
+    const pv = ctx.dofPositions.get(dv) ?? { x: 0, y: 0 };
+    const dx = pv.x - pu.x;
+    const dy = pv.y - pu.y;
+    const euclid = Math.hypot(dx, dy);
+    const proj = dx * p.unitVectorUV.x + dy * p.unitVectorUV.y;
+    const eDist = Math.round(Math.abs(euclid - p.distanceMeters));
+    const distTol = longitudinalTolerance(euclid);
+    const cosTheta = euclid > 1e-6 ? proj / euclid : 1;
+    const compassValid = euclid <= 5 || cosTheta >= MIN_COMPASS_COS;
+
+    if (!compassValid) {
+      errors += 1;
+    } else if (eDist > distTol) {
+      if (p.distanceMode === "locked") {
+        errors += 1;
+      } else {
+        warnings += 1;
+      }
+    }
+  }
+  return { errors, warnings };
+}
+
+function solveSingleScopePass(params: {
   scopeContainerId: string | null;
   containers: readonly LocationContainer[];
   locations: readonly LocationNode[];
@@ -829,6 +1102,9 @@ function solveScopeLayoutInternal(params: {
   excludedSubtreeContainerIds: Set<string>;
   depth: number;
   changedEdgeIds?: Set<string>;
+  expandedChildContainerIds: Set<string>;
+  focusLocationIds?: Set<string>;
+  skipAnchors?: boolean;
 }): ScopedSolverContext {
   const {
     scopeContainerId,
@@ -838,6 +1114,9 @@ function solveScopeLayoutInternal(params: {
     excludedSubtreeContainerIds,
     depth,
     changedEdgeIds,
+    expandedChildContainerIds,
+    focusLocationIds,
+    skipAnchors = false,
   } = params;
 
   const contById = new Map(containers.map((c) => [c.id, c]));
@@ -845,6 +1124,8 @@ function solveScopeLayoutInternal(params: {
 
   const {
     mappedIdByLocationId,
+    ownerChildByLocId,
+    portalsByChildContainer,
     directLocationIds,
     nodeIds,
     pairs,
@@ -854,6 +1135,17 @@ function solveScopeLayoutInternal(params: {
     containers,
     visibleEdges,
     excludedSubtreeContainerIds,
+    expandedChildContainerIds,
+    focusLocationIds,
+  });
+
+  const virtualOffsets = computeChildPortalOffsets({
+    expandedChildContainerIds,
+    portalsByChildContainer,
+    containers,
+    locations,
+    visibleEdges,
+    depth,
   });
 
   const uf = new UnionFind();
@@ -861,6 +1153,12 @@ function solveScopeLayoutInternal(params: {
   for (const p of pairs) {
     if (p.distanceMode !== "non_euclidean" && p.isVertical) {
       uf.union(p.u, p.v);
+    }
+  }
+  for (const vo of virtualOffsets) {
+    if (Math.hypot(vo.dx, vo.dy) < 1e-6 && uf.find(vo.u) !== uf.find(vo.v)) {
+      // Vertically coincident portals share a horizontal point
+      uf.union(vo.u, vo.v);
     }
   }
 
@@ -883,7 +1181,7 @@ function solveScopeLayoutInternal(params: {
     ? getDescendantContainerIds(scopeContainerId, containers as LocationContainer[])
     : null;
 
-  if (depth < MAX_RECURSIVE_DEPTH) {
+  if (!skipAnchors && depth < MAX_RECURSIVE_DEPTH) {
     for (const loc of locations) {
       const mappedNodeId = mappedIdByLocationId.get(loc.id);
       if (!mappedNodeId) continue;
@@ -1112,6 +1410,7 @@ function solveScopeLayoutInternal(params: {
   const { dofPositions, componentByDof } = solvePriorityBasisPositions({
     nodeIds,
     pairs,
+    virtualOffsets,
     uf,
     dofByNode,
     pinnedDofCoords,
@@ -1128,9 +1427,13 @@ function solveScopeLayoutInternal(params: {
   return {
     scopeContainerId,
     mappedIdByLocationId,
+    ownerChildByLocId,
+    portalsByChildContainer,
+    expandedChildContainerIds,
     directLocationIds,
     nodeIds,
     pairs,
+    virtualOffsets,
     uf,
     dofByNode,
     nodeIdsByDof,
@@ -1140,6 +1443,129 @@ function solveScopeLayoutInternal(params: {
     anchorDiagnostics,
     dofPositions,
   };
+}
+
+function solveScopeLayoutInternal(params: {
+  scopeContainerId: string | null;
+  containers: readonly LocationContainer[];
+  locations: readonly LocationNode[];
+  visibleEdges: readonly LocationEdge[];
+  excludedSubtreeContainerIds: Set<string>;
+  depth: number;
+  changedEdgeIds?: Set<string>;
+  skipAnchors?: boolean;
+  focusLocationIds?: Set<string>;
+  explicitExpandedChildIds?: Set<string>;
+}): ScopedSolverContext {
+  const {
+    scopeContainerId,
+    containers,
+    locations,
+    visibleEdges,
+    excludedSubtreeContainerIds,
+    depth,
+    changedEdgeIds,
+    skipAnchors = false,
+    focusLocationIds,
+    explicitExpandedChildIds,
+  } = params;
+
+  if (explicitExpandedChildIds !== undefined || depth >= MAX_RECURSIVE_DEPTH) {
+    return solveSingleScopePass({
+      scopeContainerId,
+      containers,
+      locations,
+      visibleEdges,
+      excludedSubtreeContainerIds,
+      depth,
+      changedEdgeIds,
+      expandedChildContainerIds: explicitExpandedChildIds ?? new Set<string>(),
+      focusLocationIds,
+      skipAnchors,
+    });
+  }
+
+  const {
+    childContainers,
+    ownerChildByLocId,
+    portalsByChildContainer,
+  } = resolveChildContainerMap({
+    scopeContainerId,
+    locations,
+    containers,
+    visibleEdges,
+    excludedSubtreeContainerIds,
+    focusLocationIds,
+  });
+
+  const anchoredChildren = new Set<string>();
+  for (const loc of locations) {
+    if (!loc.anchor_location_id) continue;
+    const ownerChild = ownerChildByLocId.get(loc.id);
+    if (!ownerChild) continue;
+    if (isValidSpatialAnchor(loc, loc.anchor_location_id, containers, locations).valid) {
+      anchoredChildren.add(ownerChild);
+    }
+  }
+
+  const baseExpanded = new Set<string>();
+  const ambiguousL1: string[] = [];
+
+  for (const child of childContainers) {
+    const portalCount = portalsByChildContainer.get(child.id)?.length ?? 0;
+    if (portalCount < 2) continue;
+    if (child.depth >= 2 || anchoredChildren.has(child.id)) {
+      baseExpanded.add(child.id);
+    } else {
+      ambiguousL1.push(child.id);
+    }
+  }
+
+  let effectiveExpanded = new Set(baseExpanded);
+  let bestCtx = solveSingleScopePass({
+    scopeContainerId,
+    containers,
+    locations,
+    visibleEdges,
+    excludedSubtreeContainerIds,
+    depth,
+    changedEdgeIds,
+    expandedChildContainerIds: effectiveExpanded,
+    focusLocationIds,
+    skipAnchors,
+  });
+
+  for (const childId of ambiguousL1) {
+    const currentIssues = countChildBoundaryIssues(bestCtx, childId);
+    if (currentIssues.errors === 0 && currentIssues.warnings === 0) {
+      continue;
+    }
+    const trialExpanded = new Set(effectiveExpanded);
+    trialExpanded.add(childId);
+    const trialCtx = solveSingleScopePass({
+      scopeContainerId,
+      containers,
+      locations,
+      visibleEdges,
+      excludedSubtreeContainerIds,
+      depth,
+      changedEdgeIds,
+      expandedChildContainerIds: trialExpanded,
+      focusLocationIds,
+      skipAnchors,
+    });
+    const nextIssues = countChildBoundaryIssues(trialCtx, childId);
+    if (
+      nextIssues.errors < currentIssues.errors ||
+      (nextIssues.errors === currentIssues.errors &&
+        nextIssues.warnings < currentIssues.warnings)
+    ) {
+      effectiveExpanded = trialExpanded;
+      bestCtx = trialCtx;
+    }
+  }
+
+  return bestCtx;
 }
 
 function solveReconciliationInternal(
@@ -1355,6 +1781,7 @@ export function estimateImpliedEdgeDistance(params: {
   containers: readonly LocationContainer[];
   locations: readonly LocationNode[];
   edges: readonly LocationEdge[];
+  sourceCompass?: CompassDirection;
   options?: ConsistencyAnalysisOptions;
 }): ImpliedEdgeGeometry | null {
   const {
@@ -1364,6 +1791,7 @@ export function estimateImpliedEdgeDistance(params: {
     containers,
     locations,
     edges,
+    sourceCompass,
     options,
   } = params;
   if (!fromLocationId || !toLocationId || fromLocationId === toLocationId) {
@@ -1376,16 +1804,9 @@ export function estimateImpliedEdgeDistance(params: {
   if (!fromLoc || !toLoc) return null;
 
   const visibleEdges = getVisibleEdges(edges, options);
+  const focusIds = new Set([fromLocationId, toLocationId]);
 
-  const tryScope = (targetScopeId: string | null): ImpliedEdgeGeometry | null => {
-    const ctx = solveScopeLayoutInternal({
-      scopeContainerId: targetScopeId,
-      containers,
-      locations,
-      visibleEdges,
-      excludedSubtreeContainerIds: new Set<string>(),
-      depth: 0,
-    });
+  const evaluateCtx = (ctx: ScopedSolverContext): ImpliedEdgeGeometry | null => {
     const mFrom = ctx.mappedIdByLocationId.get(fromLocationId);
     const mTo = ctx.mappedIdByLocationId.get(toLocationId);
     if (!mFrom || !mTo || mFrom === mTo) return null;
@@ -1419,6 +1840,65 @@ export function estimateImpliedEdgeDistance(params: {
       dx,
       dy,
     };
+  };
+
+  const matchesSourceCompass = (geom: ImpliedEdgeGeometry): boolean => {
+    if (!sourceCompass) return true;
+    const euclid = Math.hypot(geom.dx, geom.dy);
+    if (euclid <= 5) return true;
+    const u = COMPASS_UNIT_VECTORS[sourceCompass];
+    return (geom.dx * u.x + geom.dy * u.y) / euclid >= MIN_COMPASS_COS;
+  };
+
+  const tryScope = (targetScopeId: string | null): ImpliedEdgeGeometry | null => {
+    const ctx = solveScopeLayoutInternal({
+      scopeContainerId: targetScopeId,
+      containers,
+      locations,
+      visibleEdges,
+      excludedSubtreeContainerIds: new Set<string>(),
+      depth: 0,
+      focusLocationIds: focusIds,
+    });
+    const directGeom = evaluateCtx(ctx);
+    if (directGeom && (!sourceCompass || matchesSourceCompass(directGeom))) {
+      return directGeom;
+    }
+
+    if (sourceCompass) {
+      const unexpandedCandidates = [
+        ctx.ownerChildByLocId.get(fromLocationId) ?? null,
+        ctx.ownerChildByLocId.get(toLocationId) ?? null,
+      ]
+        .filter((cid): cid is string => typeof cid === "string" && cid.length > 0)
+        .filter(
+          (cid, idx, arr) =>
+            arr.indexOf(cid) === idx &&
+            !ctx.expandedChildContainerIds.has(cid) &&
+            (ctx.portalsByChildContainer.get(cid)?.length ?? 0) >= 2
+        );
+
+      for (const candCid of unexpandedCandidates) {
+        const trialExpanded = new Set(ctx.expandedChildContainerIds);
+        trialExpanded.add(candCid);
+        const trialCtx = solveScopeLayoutInternal({
+          scopeContainerId: targetScopeId,
+          containers,
+          locations,
+          visibleEdges,
+          excludedSubtreeContainerIds: new Set<string>(),
+          depth: 0,
+          focusLocationIds: focusIds,
+          explicitExpandedChildIds: trialExpanded,
+        });
+        const trialGeom = evaluateCtx(trialCtx);
+        if (trialGeom && matchesSourceCompass(trialGeom)) {
+          return trialGeom;
+        }
+      }
+    }
+
+    return directGeom;
   };
 
   const directRes = tryScope(scopeContainerId);

@@ -293,6 +293,7 @@ export function resolveDefaultNewEdgeDistance(params: {
   sourceKind: "location" | "container";
   targetKind: "location" | "container";
   explicitDistanceMeters?: number;
+  sourceCompass?: CompassDirection;
   scopeContainerId: string | null;
   containers: readonly LocationContainer[];
   locations: readonly LocationNode[];
@@ -305,6 +306,7 @@ export function resolveDefaultNewEdgeDistance(params: {
     sourceKind,
     targetKind,
     explicitDistanceMeters,
+    sourceCompass,
     scopeContainerId,
     containers,
     locations,
@@ -334,6 +336,7 @@ export function resolveDefaultNewEdgeDistance(params: {
     containers,
     locations,
     edges,
+    sourceCompass,
     options,
   });
   if (implied) {
@@ -838,6 +841,7 @@ export function useTopologyMutations({
         sourceKind: opts.sourceKind,
         targetKind: opts.targetKind,
         explicitDistanceMeters: opts.distanceMeters,
+        sourceCompass: opts.sourceSlot,
         scopeContainerId: currentContainerId,
         containers: workingContainers,
         locations: workingLocations,

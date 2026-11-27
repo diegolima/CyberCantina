@@ -526,4 +526,112 @@ describe("spatialConsistency", () => {
     expect(report.proposedByEdgeId["ent_t1l_fwd"]?.proposedMeters).toBe(1000);
     expect(report.proposedByEdgeId["t1l_t1m_fwd"]?.proposedMeters).toBe(1500);
   });
+
+  it("preserves portal offsets for sprawling Sewers in Sector 9 while keeping The Neon Rust collapsed", () => {
+    const buildFixture = (withAnchor: boolean) => {
+      const containers = [
+        mkCont("sector9", "Sector 9: The Drain", 3, null),
+        mkCont("neon_rust", "The Neon Rust", 1, "sector9"),
+        mkCont("sewers", "Sewers", 1, "sector9"),
+      ];
+      const locations = [
+        mkLoc("main_floor", "Main Floor", "neon_rust", { is_starting_location: true }),
+        mkLoc("sump_well", "The Sump-Well", "neon_rust"),
+        mkLoc("chop_cath", "The Chop-Cathedral", "sector9"),
+        mkLoc("pillory", "The Pillory", "sector9"),
+        mkLoc("sewer_ent", "The Neon Rust's Sewer Entrance", "sector9"),
+        mkLoc("t1l", "Tunnel 1-L", "sewers"),
+        mkLoc("t1m", "Tunnel 1-M", "sewers"),
+        mkLoc("t2n", "Tunnel 2-N", "sewers", {
+          anchor_location_id: withAnchor ? "pillory" : null,
+        }),
+      ];
+      const baseEdges: LocationEdge[] = [
+        ...mkPair("nr_sump", "main_floor", "sump_well", "NW", 280),
+        ...mkPair("nr_chop", "main_floor", "chop_cath", "E", 500),
+        ...mkPair("chop_t1m", "chop_cath", "t1m", "N", 1000),
+        ...mkPair("t1m_t1l", "t1m", "t1l", "W", 500),
+        ...mkPair("sump_ent", "sump_well", "sewer_ent", "N", 1),
+      ];
+      return { containers, locations, baseEdges };
+    };
+
+    for (const withAnchor of [true, false]) {
+      const { containers, locations, baseEdges } = buildFixture(withAnchor);
+
+      // 1. Pre-link implied distance with sourceCompass="N" resolves 999m N (not 1117m NE)
+      const implied = estimateImpliedEdgeDistance({
+        fromLocationId: "sewer_ent",
+        toLocationId: "t1l",
+        scopeContainerId: "sector9",
+        containers,
+        locations,
+        edges: baseEdges,
+        sourceCompass: "N",
+      });
+      expect(implied?.distanceMeters).toBe(999);
+      expect(implied?.compassDirection).toBe("N");
+
+      const defaultDist = resolveDefaultNewEdgeDistance({
+        fromLoc: locations.find((l) => l.id === "sewer_ent")!,
+        toLoc: locations.find((l) => l.id === "t1l")!,
+        sourceKind: "location",
+        targetKind: "location",
+        sourceCompass: "N",
+        scopeContainerId: "sector9",
+        containers,
+        locations,
+        edges: baseEdges,
+      });
+      expect(defaultDist).toEqual({ distanceMeters: 999, fromGeometry: true });
+
+      // 2. Valid 1000m S link from Tunnel 1-L -> Sewer Entrance passes with 0 errors and 0 warnings
+      const validReport = analyzeSpatialConsistency({
+        scopeContainerId: "sector9",
+        containers,
+        locations,
+        edges: [...baseEdges, ...mkPair("t1l_ent", "t1l", "sewer_ent", "S", 1000)],
+      });
+      expect(validReport.errorCount).toBe(0);
+      expect(validReport.warningCount).toBe(0);
+      // Internal Sewers edge never leaks into Sector 9 diagnostics
+      expect(validReport.diagnosticsByEdgeId["t1m_t1l_fwd"]).toBeUndefined();
+
+      // 3. Wrong 1117m S distance warns distance_mismatch implying ~999m (NOT compass_conflict 1117m SW)
+      const mismatchReport = analyzeSpatialConsistency({
+        scopeContainerId: "sector9",
+        containers,
+        locations,
+        edges: [...baseEdges, ...mkPair("t1l_ent", "t1l", "sewer_ent", "S", 1117)],
+      });
+      expect(mismatchReport.errorCount).toBe(0);
+      expect(mismatchReport.diagnosticsByEdgeId["t1l_ent_fwd"]?.kind).toBe("distance_mismatch");
+      expect(mismatchReport.diagnosticsByEdgeId["t1l_ent_fwd"]?.suggestedMeters).toBe(999);
+      // Neon Rust stays collapsed: Main Floor <-> Chop-Cathedral remains 500m E without being distorted by 280m NW
+      expect(mismatchReport.diagnosticsByEdgeId["nr_chop_fwd"]).toBeUndefined();
+    }
+  });
+
+  it("expands L2/L3 macro containers with 2+ portals so World Root preserves portal offsets", () => {
+    const containers = [mkCont("district", "Outer District", 2, null)];
+    const locations = [
+      mkLoc("gate_w", "West Gate", null, { is_starting_location: true }),
+      mkLoc("d_west", "District West", "district"),
+      mkLoc("d_east", "District East", "district"),
+      mkLoc("gate_e", "East Gate", null),
+    ];
+    const edges: LocationEdge[] = [
+      ...mkPair("gw_dw", "gate_w", "d_west", "N", 100),
+      ...mkPair("dw_de", "d_west", "d_east", "E", 1000),
+      ...mkPair("de_ge", "d_east", "gate_e", "S", 100),
+      ...mkPair("gw_ge", "gate_w", "gate_e", "E", 1000),
+    ];
+    const report = analyzeSpatialConsistency({
+      scopeContainerId: null,
+      containers,
+      locations,
+      edges,
+    });
+    expect(report.diagnostics).toHaveLength(0);
+  });
 });
