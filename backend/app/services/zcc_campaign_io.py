@@ -19,6 +19,7 @@ from app.db.vector_math import (
 )
 from app.schemas.physical import normalize_physical_stance, sanitize_physical_context
 from app.schemas.world import (
+    extract_edge_consistency_fields,
     extract_edge_distance_meters,
     extract_edge_link_fields,
     normalize_lore_category,
@@ -1289,14 +1290,22 @@ def ingest_campaigns_atomic(
                 mapped_sup = id_remap.get(str(old_sup)) if old_sup else None
                 old_img = loc.get("image_media_id")
                 mapped_img = id_remap.get(str(old_img)) if old_img else None
+                old_anchor = loc.get("anchor_location_id")
+                mapped_anchor = (
+                    id_remap.get(str(old_anchor))
+                    if old_anchor and str(old_anchor) in id_remap and str(old_anchor) != str(loc["id"])
+                    else None
+                )
+                if not mapped_cont_id:
+                    mapped_anchor = None
                 conn.execute(
                     """
                     INSERT INTO location_nodes (
                         id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
                         is_entry_exit, name, summary, description, environmental_tags_json,
-                        is_starting_location, is_hub, starting_message, ui_x, ui_y, icon, image_media_id
+                        is_starting_location, is_hub, starting_message, ui_x, ui_y, icon, image_media_id, anchor_location_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_loc_id,
@@ -1316,6 +1325,7 @@ def ingest_campaigns_atomic(
                         loc.get("ui_y"),
                         loc.get("icon"),
                         mapped_img,
+                        mapped_anchor,
                     ),
                 )
 
@@ -1337,15 +1347,17 @@ def ingest_campaigns_atomic(
                 speed_modifier, travel_mode, obstacles, is_blocked, is_secret = (
                     extract_edge_link_fields(edge)
                 )
+                distance_mode, is_vertical = extract_edge_consistency_fields(edge)
                 conn.execute(
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
                         direction_label, compass_direction, distance_meters,
                         speed_modifier, travel_mode, obstacles_json,
-                        is_blocked, is_secret, created_at_turn_id, superseded_at_turn_id
+                        is_blocked, is_secret, distance_mode, is_vertical,
+                        created_at_turn_id, superseded_at_turn_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_edge_id,
@@ -1360,6 +1372,8 @@ def ingest_campaigns_atomic(
                         json.dumps(obstacles),
                         1 if is_blocked else 0,
                         1 if is_secret else 0,
+                        distance_mode,
+                        1 if is_vertical else 0,
                         mapped_ct,
                         mapped_sup,
                     ),
@@ -1424,14 +1438,24 @@ def ingest_campaigns_atomic(
                 old_pid = ov.get("parent_id")
                 mapped_pid = id_remap.get(str(old_pid)) if old_pid else None
                 raw_meta_json = ov.get("metadata_override_json")
-                if ov.get("entity_type") == "container" and isinstance(raw_meta_json, str) and raw_meta_json:
+                if isinstance(raw_meta_json, str) and raw_meta_json:
                     try:
                         parsed_meta = json.loads(raw_meta_json)
-                        if isinstance(parsed_meta, dict) and isinstance(parsed_meta.get("ghost_coords"), dict):
-                            parsed_meta["ghost_coords"] = remap_ghost_coords_dict(
-                                parsed_meta["ghost_coords"], id_remap
-                            )
-                            raw_meta_json = json.dumps(parsed_meta)
+                        if isinstance(parsed_meta, dict):
+                            changed_meta = False
+                            if ov.get("entity_type") == "container" and isinstance(parsed_meta.get("ghost_coords"), dict):
+                                parsed_meta["ghost_coords"] = remap_ghost_coords_dict(
+                                    parsed_meta["ghost_coords"], id_remap
+                                )
+                                changed_meta = True
+                            if ov.get("entity_type") == "location" and "anchor_location_id" in parsed_meta:
+                                raw_anc = parsed_meta["anchor_location_id"]
+                                parsed_meta["anchor_location_id"] = (
+                                    id_remap.get(str(raw_anc)) if raw_anc else None
+                                )
+                                changed_meta = True
+                            if changed_meta:
+                                raw_meta_json = json.dumps(parsed_meta)
                     except Exception:
                         pass
                 conn.execute(

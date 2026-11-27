@@ -312,6 +312,8 @@ class SchemaInitMixin:
         has_speed = "speed_modifier" in edge_cols
         has_mode = "travel_mode" in edge_cols
         has_obstacles = "obstacles_json" in edge_cols
+        has_distance_mode = "distance_mode" in edge_cols
+        has_is_vertical = "is_vertical" in edge_cols
 
         speed_expr = (
             f"COALESCE(speed_modifier, {DEFAULT_EDGE_SPEED_MODIFIER})"
@@ -329,6 +331,12 @@ class SchemaInitMixin:
         else:
             blocked_expr = "0"
         secret_expr = "COALESCE(is_secret, 0)" if has_secret else "0"
+        distance_mode_expr = (
+            "CASE WHEN distance_mode IN ('flexible', 'locked', 'non_euclidean') THEN distance_mode ELSE 'flexible' END"
+            if has_distance_mode
+            else "'flexible'"
+        )
+        is_vertical_expr = "COALESCE(is_vertical, 0)" if has_is_vertical else "0"
 
         conn.commit()
         conn.execute("PRAGMA foreign_keys = OFF;")
@@ -350,6 +358,8 @@ class SchemaInitMixin:
                     obstacles_json TEXT NOT NULL DEFAULT '[]',
                     is_blocked INTEGER NOT NULL DEFAULT 0,
                     is_secret INTEGER NOT NULL DEFAULT 0,
+                    distance_mode TEXT NOT NULL DEFAULT 'flexible' CHECK(distance_mode IN ('flexible', 'locked', 'non_euclidean')),
+                    is_vertical INTEGER NOT NULL DEFAULT 0 CHECK(is_vertical IN (0, 1)),
                     created_at_turn_id TEXT NULL,
                     superseded_at_turn_id TEXT NULL
                 );
@@ -361,14 +371,16 @@ class SchemaInitMixin:
                     id, world_id, from_location_id, to_location_id,
                     direction_label, compass_direction, distance_meters,
                     speed_modifier, travel_mode, obstacles_json,
-                    is_blocked, is_secret, created_at_turn_id, superseded_at_turn_id
+                    is_blocked, is_secret, distance_mode, is_vertical,
+                    created_at_turn_id, superseded_at_turn_id
                 )
                 SELECT
                     id, world_id, from_location_id, to_location_id,
                     direction_label, compass_direction,
                     MAX(1, COALESCE(distance_meters, {DEFAULT_FALLBACK_DISTANCE_METERS})),
                     {speed_expr}, {mode_expr}, {obstacles_expr},
-                    {blocked_expr}, {secret_expr}, created_at_turn_id, superseded_at_turn_id
+                    {blocked_expr}, {secret_expr}, {distance_mode_expr}, {is_vertical_expr},
+                    created_at_turn_id, superseded_at_turn_id
                 FROM location_edges;
                 """
             )
@@ -1320,6 +1332,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE location_nodes ADD COLUMN image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL"
                 )
+            if "anchor_location_id" not in loc_cols:
+                conn.execute(
+                    "ALTER TABLE location_nodes ADD COLUMN anchor_location_id TEXT NULL"
+                )
 
             edge_cols = {
                 r["name"]
@@ -1335,6 +1351,18 @@ class SchemaInitMixin:
                 )
             self._migrate_location_edges_to_distance_meters(conn)
             self._migrate_location_edges_to_first_class_links(conn)
+            edge_cols_after = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(location_edges)").fetchall()
+            }
+            if "distance_mode" not in edge_cols_after:
+                conn.execute(
+                    "ALTER TABLE location_edges ADD COLUMN distance_mode TEXT NOT NULL DEFAULT 'flexible' CHECK(distance_mode IN ('flexible', 'locked', 'non_euclidean'))"
+                )
+            if "is_vertical" not in edge_cols_after:
+                conn.execute(
+                    "ALTER TABLE location_edges ADD COLUMN is_vertical INTEGER NOT NULL DEFAULT 0 CHECK(is_vertical IN (0, 1))"
+                )
 
             vec_cols = {
                 r["name"]
@@ -1739,10 +1767,11 @@ class SchemaInitMixin:
                             ui_x REAL NULL,
                             ui_y REAL NULL,
                             icon TEXT NULL,
-                            image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL
+                            image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL,
+                            anchor_location_id TEXT NULL
                         )
                         """,
-                        "id, world_id, created_at_turn_id, superseded_at_turn_id, container_id, is_entry_exit, name, summary, description, environmental_tags_json, is_starting_location, is_hub, starting_message, ui_x, ui_y, icon, image_media_id",
+                        "id, world_id, created_at_turn_id, superseded_at_turn_id, container_id, is_entry_exit, name, summary, description, environmental_tags_json, is_starting_location, is_hub, starting_message, ui_x, ui_y, icon, image_media_id, anchor_location_id",
                     ),
                 ):
                     ddl_row = conn.execute(

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Anchor,
   ArrowUpRight,
   Eye,
   EyeOff,
@@ -1219,6 +1220,7 @@ export const StandaloneContainerCreateModal: React.FC<StandaloneContainerCreateM
 export type ContextMenuTarget =
   | { kind: "location"; id: string }
   | { kind: "container"; id: string }
+  | { kind: "ghost"; externalLocationId: string; connectedPortalIds: string[] }
   | {
       kind: "edge";
       edgeId: string;
@@ -1260,6 +1262,7 @@ export interface MapContextMenuProps {
   onToggleEdgeSecret?: (edgeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
   onDeleteEdgeGroup?: (edgeIds: string[]) => void;
+  onSetLocationAnchor?: (locId: string, anchorLocationId: string | null) => void;
 }
 
 const menuItemStyle = (disabled = false, danger = false): React.CSSProperties => ({
@@ -1307,12 +1310,17 @@ export const MapContextMenu: React.FC<MapContextMenuProps> = ({
   onToggleEdgeSecret,
   onDeleteEdge,
   onDeleteEdgeGroup,
+  onSetLocationAnchor,
 }) => {
   if (!menu) return null;
 
   const { target } = menu;
   const loc = target.kind === "location" ? locations.find((l) => l.id === target.id) : null;
   const cont = target.kind === "container" ? containers.find((c) => c.id === target.id) : null;
+  const ghostExtLoc =
+    target.kind === "ghost"
+      ? locations.find((l) => l.id === target.externalLocationId) ?? null
+      : null;
   const edge = target.kind === "edge" ? edges.find((e) => e.id === target.edgeId) : null;
 
   return (
@@ -1498,6 +1506,67 @@ export const MapContextMenu: React.FC<MapContextMenuProps> = ({
             >
               <Trash2 size={13} />
               <span>Delete Container</span>
+            </button>
+          </>
+        );
+      })()}
+
+      {ghostExtLoc && target.kind === "ghost" && (() => {
+        const connectedPortals = target.connectedPortalIds
+          .map((pid) => locations.find((l) => l.id === pid))
+          .filter((l): l is LocationNode => Boolean(l));
+        return (
+          <>
+            <div
+              style={{
+                padding: "3px 9px 5px",
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                color: "#67e8f9",
+                borderBottom: "1px solid var(--border-subtle)",
+                marginBottom: 2,
+              }}
+            >
+              External: {ghostExtLoc.name}
+            </div>
+            {onSetLocationAnchor && connectedPortals.map((portal) => {
+              const isAlreadyAnchored =
+                portal.anchor_location_id === ghostExtLoc.id;
+              return (
+                <button
+                  key={portal.id}
+                  type="button"
+                  style={menuItemStyle()}
+                  onClick={() => {
+                    onSetLocationAnchor(
+                      portal.id,
+                      isAlreadyAnchored ? null : ghostExtLoc.id
+                    );
+                    onClose();
+                  }}
+                >
+                  <Anchor
+                    size={13}
+                    color={isAlreadyAnchored ? "#fbbf24" : "#22d3ee"}
+                  />
+                  <span>
+                    {isAlreadyAnchored
+                      ? `Clear Anchor on ${portal.name}`
+                      : `Anchor ${portal.name} here`}
+                  </span>
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              style={menuItemStyle()}
+              onClick={() => {
+                onInspect("location", ghostExtLoc.id);
+                onClose();
+              }}
+            >
+              <LogIn size={13} color="#22d3ee" />
+              <span>Inspect {ghostExtLoc.name}</span>
             </button>
           </>
         );

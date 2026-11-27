@@ -47,6 +47,8 @@ from app.schemas.world import (
     canonical_edge_pair_key,
     is_edge_revealed,
     normalize_compass_direction,
+    normalize_edge_distance_mode,
+    normalize_edge_is_vertical,
     normalize_edge_obstacles,
     normalize_edge_speed_modifier,
     parse_ghost_coords_json,
@@ -753,6 +755,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         obstacles: list[str] | None = None,
         is_blocked: bool = False,
         is_secret: bool = False,
+        distance_mode: str = "flexible",
+        is_vertical: bool = False,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
         """Connect two existing map locations on the campaign's active timeline."""
@@ -817,6 +821,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         norm_obstacles_json = json.dumps(normalize_edge_obstacles(obstacles or []))
         blocked_int = 1 if is_blocked else 0
         secret_int = 1 if is_secret else 0
+        norm_dist_mode = normalize_edge_distance_mode(distance_mode)
+        vertical_int = 1 if normalize_edge_is_vertical(is_vertical) else 0
 
         conn = self._connect()
         try:
@@ -826,9 +832,9 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     id, world_id, from_location_id, to_location_id,
                     direction_label, compass_direction, distance_meters,
                     speed_modifier, travel_mode, obstacles_json,
-                    is_blocked, is_secret, created_at_turn_id
+                    is_blocked, is_secret, distance_mode, is_vertical, created_at_turn_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     fwd_edge_id,
@@ -843,6 +849,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     norm_obstacles_json,
                     blocked_int,
                     secret_int,
+                    norm_dist_mode,
+                    vertical_int,
                     campaign.active_leaf_turn_id,
                 ),
             )
@@ -861,9 +869,9 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                             id, world_id, from_location_id, to_location_id,
                             direction_label, compass_direction, distance_meters,
                             speed_modifier, travel_mode, obstacles_json,
-                            is_blocked, is_secret, created_at_turn_id
+                            is_blocked, is_secret, distance_mode, is_vertical, created_at_turn_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             rev_edge_id,
@@ -878,6 +886,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                             norm_obstacles_json,
                             blocked_int,
                             secret_int,
+                            norm_dist_mode,
+                            vertical_int,
                             campaign.active_leaf_turn_id,
                         ),
                     )
@@ -900,6 +910,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         obstacles: list[str] | None = None,
         is_blocked: bool | None = None,
         is_secret: bool | None = None,
+        distance_mode: str | None = None,
+        is_vertical: bool | None = None,
         direction_label: str | None = None,
         reciprocal_direction_label: str | None = None,
         update_reciprocal: bool = True,
@@ -978,6 +990,16 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                 )
                 next_blocked = bool(is_blocked) if is_blocked is not None else bool(edge.is_blocked)
                 next_secret = bool(is_secret) if is_secret is not None else bool(edge.is_secret)
+                next_distance_mode = (
+                    normalize_edge_distance_mode(distance_mode)
+                    if distance_mode is not None
+                    else normalize_edge_distance_mode(getattr(edge, "distance_mode", "flexible"))
+                )
+                next_is_vertical = (
+                    normalize_edge_is_vertical(is_vertical)
+                    if is_vertical is not None
+                    else normalize_edge_is_vertical(getattr(edge, "is_vertical", False))
+                )
 
                 if is_primary and direction_label is not None:
                     next_label = direction_label.strip() or edge.direction_label
@@ -991,7 +1013,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                         """
                         UPDATE location_edges
                         SET direction_label = ?, distance_meters = ?, speed_modifier = ?,
-                            travel_mode = ?, obstacles_json = ?, is_blocked = ?, is_secret = ?
+                            travel_mode = ?, obstacles_json = ?, is_blocked = ?, is_secret = ?,
+                            distance_mode = ?, is_vertical = ?
                         WHERE id = ?
                         """,
                         (
@@ -1002,6 +1025,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                             json.dumps(next_obs),
                             1 if next_blocked else 0,
                             1 if next_secret else 0,
+                            next_distance_mode,
+                            1 if next_is_vertical else 0,
                             edge.id,
                         ),
                     )
@@ -1017,9 +1042,9 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                             id, world_id, from_location_id, to_location_id,
                             direction_label, compass_direction, distance_meters,
                             speed_modifier, travel_mode, obstacles_json,
-                            is_blocked, is_secret, created_at_turn_id
+                            is_blocked, is_secret, distance_mode, is_vertical, created_at_turn_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_edge_id,
@@ -1034,6 +1059,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                             json.dumps(next_obs),
                             1 if next_blocked else 0,
                             1 if next_secret else 0,
+                            next_distance_mode,
+                            1 if next_is_vertical else 0,
                             leaf_turn_id,
                         ),
                     )
@@ -1324,6 +1351,9 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     loc.is_hub = bool(meta["is_hub"])
                 if "starting_message" in meta and isinstance(meta["starting_message"], str):
                     loc.starting_message = meta["starting_message"]
+                if "anchor_location_id" in meta:
+                    raw_anchor = meta["anchor_location_id"]
+                    loc.anchor_location_id = str(raw_anchor).strip() or None if isinstance(raw_anchor, str) else None
 
         if superseded_loc_ids:
             locations = [loc for loc in locations if loc.id not in superseded_loc_ids]
@@ -1470,6 +1500,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             ),
             icon=r["icon"] if "icon" in keys else None,
             image_media_id=r["image_media_id"] if "image_media_id" in keys else None,
+            anchor_location_id=r["anchor_location_id"] if "anchor_location_id" in keys else None,
         )
 
     @staticmethod
@@ -1493,6 +1524,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             ui_y=r["ui_y"] if "ui_y" in keys else None,
             icon=r["icon"] if "icon" in keys else None,
             image_media_id=r["image_media_id"] if "image_media_id" in keys else None,
+            anchor_location_id=r["anchor_location_id"] if "anchor_location_id" in keys else None,
         )
 
     @staticmethod
@@ -1551,6 +1583,12 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             obstacles=normalize_edge_obstacles(raw_obs),
             is_blocked=is_blocked,
             is_secret=is_secret,
+            distance_mode=normalize_edge_distance_mode(
+                r["distance_mode"] if "distance_mode" in keys else "flexible"
+            ),
+            is_vertical=normalize_edge_is_vertical(
+                r["is_vertical"] if "is_vertical" in keys else False
+            ),
             created_at_turn_id=r["created_at_turn_id"],
             superseded_at_turn_id=r["superseded_at_turn_id"] if "superseded_at_turn_id" in keys else None,
         )

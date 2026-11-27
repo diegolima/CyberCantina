@@ -24,11 +24,14 @@ from app.schemas.world import (
     WorldWizardDraft,
     extract_world_unsupported_fields,
     normalize_compass_direction,
+    normalize_edge_distance_mode,
+    normalize_edge_is_vertical,
     normalize_edge_obstacles,
     normalize_edge_speed_modifier,
     normalize_edge_travel_mode,
     pick_available_compass_direction,
     remap_ghost_coords_dict,
+    sanitize_location_anchors,
     sanitize_world_unsupported_fields,
 )
 from app.db.repos.base import (
@@ -486,15 +489,19 @@ class WorldsMixin:
                 fwd_obs_json = json.dumps(normalize_edge_obstacles(edge.obstacles))
                 fwd_blocked = 1 if edge.is_blocked else 0
                 fwd_secret = 1 if edge.is_secret else 0
+                fwd_dist_mode = normalize_edge_distance_mode(
+                    getattr(edge, "distance_mode", "flexible")
+                )
+                fwd_vertical = 1 if normalize_edge_is_vertical(getattr(edge, "is_vertical", False)) else 0
                 conn.execute(
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
                         direction_label, compass_direction, distance_meters,
                         speed_modifier, travel_mode, obstacles_json,
-                        is_blocked, is_secret, created_at_turn_id
+                        is_blocked, is_secret, distance_mode, is_vertical, created_at_turn_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                     """,
                     (
                         edge_id,
@@ -509,6 +516,8 @@ class WorldsMixin:
                         fwd_obs_json,
                         fwd_blocked,
                         fwd_secret,
+                        fwd_dist_mode,
+                        fwd_vertical,
                     ),
                 )
                 if edge.bidirectional:
@@ -528,9 +537,9 @@ class WorldsMixin:
                             id, world_id, from_location_id, to_location_id,
                             direction_label, compass_direction, distance_meters,
                             speed_modifier, travel_mode, obstacles_json,
-                            is_blocked, is_secret, created_at_turn_id
+                            is_blocked, is_secret, distance_mode, is_vertical, created_at_turn_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                         """,
                         (
                             rev_id,
@@ -545,6 +554,8 @@ class WorldsMixin:
                             fwd_obs_json,
                             fwd_blocked,
                             fwd_secret,
+                            fwd_dist_mode,
+                            fwd_vertical,
                         ),
                     )
 
@@ -1050,6 +1061,7 @@ class WorldsMixin:
             valid_new_loc_ids = set(loc_id_map.values())
 
             cont_id_map: dict[str, str] = {}
+            remapped_conts_for_anchors: list[LocationContainer] = []
             for cont in sorted_containers:
                 can_reuse_cont = (
                     reuse_ids
@@ -1064,6 +1076,15 @@ class WorldsMixin:
                     cont_id_map.get(cont.parent_container_id)
                     if cont.parent_container_id
                     else None
+                )
+                remapped_conts_for_anchors.append(
+                    cont.model_copy(
+                        update={
+                            "id": new_cont_id,
+                            "world_id": target_world_id,
+                            "parent_container_id": mapped_parent_id,
+                        }
+                    )
                 )
                 cont_media_id = (
                     cont.image_media_id
@@ -1103,6 +1124,8 @@ class WorldsMixin:
                     ),
                 )
 
+            remapped_locs_for_anchors: list[tuple[LocationNode, str | None, int, int, int, str]] = []
+            sanitized_loc_models: list[LocationNode] = []
             for idx, loc in enumerate(base_locations):
                 new_loc_id = loc_id_map[loc.id]
                 is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
@@ -1117,31 +1140,57 @@ class WorldsMixin:
                     if loc.image_media_id and loc.image_media_id in valid_image_media_ids
                     else None
                 )
+                raw_anchor = getattr(loc, "anchor_location_id", None)
+                mapped_anchor = loc_id_map.get(raw_anchor) if raw_anchor else None
+                sanitized_loc = loc.model_copy(
+                    update={
+                        "id": new_loc_id,
+                        "world_id": target_world_id,
+                        "container_id": mapped_loc_cont,
+                        "anchor_location_id": mapped_anchor,
+                    }
+                )
+                sanitized_loc_models.append(sanitized_loc)
+                remapped_locs_for_anchors.append(
+                    (
+                        sanitized_loc,
+                        loc_media_id,
+                        is_start,
+                        is_hub,
+                        is_portal,
+                        starting_msg,
+                    )
+                )
+
+            sanitize_location_anchors(remapped_conts_for_anchors, sanitized_loc_models)
+
+            for sanitized_loc, loc_media_id, is_start, is_hub, is_portal, starting_msg in remapped_locs_for_anchors:
                 conn.execute(
                     """
                     INSERT INTO location_nodes (
                         id, world_id, created_at_turn_id, superseded_at_turn_id, container_id, name, summary,
                         description, environmental_tags_json, is_starting_location, is_hub,
-                        is_entry_exit, starting_message, ui_x, ui_y, icon, image_media_id
+                        is_entry_exit, starting_message, ui_x, ui_y, icon, image_media_id, anchor_location_id
                     )
-                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        new_loc_id,
+                        sanitized_loc.id,
                         target_world_id,
-                        mapped_loc_cont,
-                        loc.name,
-                        loc.summary,
-                        loc.description,
-                        json.dumps(loc.environmental_tags),
+                        sanitized_loc.container_id,
+                        sanitized_loc.name,
+                        sanitized_loc.summary,
+                        sanitized_loc.description,
+                        json.dumps(sanitized_loc.environmental_tags),
                         is_start,
                         is_hub,
                         is_portal,
                         starting_msg,
-                        loc.ui_x,
-                        loc.ui_y,
-                        loc.icon,
+                        sanitized_loc.ui_x,
+                        sanitized_loc.ui_y,
+                        sanitized_loc.icon,
                         loc_media_id,
+                        sanitized_loc.anchor_location_id,
                     ),
                 )
 
@@ -1174,9 +1223,9 @@ class WorldsMixin:
                         id, world_id, from_location_id, to_location_id,
                         direction_label, compass_direction, distance_meters,
                         speed_modifier, travel_mode, obstacles_json,
-                        is_blocked, is_secret, created_at_turn_id
+                        is_blocked, is_secret, distance_mode, is_vertical, created_at_turn_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                     """,
                     (
                         new_edge_id,
@@ -1191,6 +1240,8 @@ class WorldsMixin:
                         json.dumps(normalize_edge_obstacles(edge.obstacles)),
                         1 if edge.is_blocked else 0,
                         1 if edge.is_secret else 0,
+                        normalize_edge_distance_mode(getattr(edge, "distance_mode", "flexible")),
+                        1 if normalize_edge_is_vertical(getattr(edge, "is_vertical", False)) else 0,
                     ),
                 )
 

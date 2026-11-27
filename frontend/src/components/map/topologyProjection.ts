@@ -1,5 +1,6 @@
 import type {
   CompassDirection,
+  EdgeDistanceMode,
   LocationContainer,
   LocationEdge,
   LocationNode,
@@ -436,6 +437,8 @@ export interface ProjectedTopologyEdge {
   obstacles: string[];
   is_blocked: boolean;
   is_secret: boolean;
+  distance_mode?: EdgeDistanceMode;
+  is_vertical?: boolean;
   isUndiscoveredSecret: boolean;
   isAggregated: boolean;
   containsBlockedEdge: boolean;
@@ -471,6 +474,8 @@ export interface ProjectedGhostEdge {
   obstacles: string[];
   is_blocked: boolean;
   is_secret: boolean;
+  distance_mode?: EdgeDistanceMode;
+  is_vertical?: boolean;
   isUndiscoveredSecret: boolean;
   rawEdge: LocationEdge;
 }
@@ -752,6 +757,8 @@ export function projectTopologyForDepth(
       obstacles: edge.obstacles ?? [],
       is_blocked: Boolean(edge.is_blocked),
       is_secret: Boolean(edge.is_secret),
+      distance_mode: edge.distance_mode ?? "flexible",
+      is_vertical: Boolean(edge.is_vertical),
       isUndiscoveredSecret: isUndiscoveredSecretEdge(edge),
       rawEdge: edge,
     });
@@ -810,6 +817,8 @@ export function projectTopologyForDepth(
         obstacles: edge.obstacles ?? [],
         is_blocked: Boolean(edge.is_blocked),
         is_secret: Boolean(edge.is_secret),
+        distance_mode: edge.distance_mode ?? "flexible",
+        is_vertical: Boolean(edge.is_vertical),
         isUndiscoveredSecret: undisc,
         isAggregated: false,
         containsBlockedEdge: Boolean(edge.is_blocked),
@@ -837,6 +846,14 @@ export function projectTopologyForDepth(
     const anySecret = group.edges.some((e) => e.is_secret);
     const anyUndiscSecret = group.edges.some((e) => isUndiscoveredSecretEdge(e));
     const anyObstacles = group.edges.some((e) => (e.obstacles?.length ?? 0) > 0);
+    const aggDistMode = group.edges.every(
+      (e) => (e.distance_mode ?? "flexible") === "non_euclidean"
+    )
+      ? "non_euclidean"
+      : group.edges.some((e) => e.distance_mode === "locked")
+      ? "locked"
+      : "flexible";
+    const aggVertical = group.edges.every((e) => Boolean(e.is_vertical));
     projectedEdges.push({
       id: `agg:${groupKey}`,
       sourceNodeId: group.sourceNodeId,
@@ -852,6 +869,8 @@ export function projectTopologyForDepth(
       obstacles: first.obstacles ?? [],
       is_blocked: anyBlocked,
       is_secret: anySecret,
+      distance_mode: aggDistMode,
+      is_vertical: aggVertical,
       isUndiscoveredSecret: anyUndiscSecret,
       isAggregated: true,
       containsBlockedEdge: anyBlocked,
@@ -1192,6 +1211,7 @@ export function areGraphSnapshotsEqual(a: GraphSnapshot, b: GraphSnapshot): bool
       (x.ui_x ?? null) !== (y.ui_x ?? null) ||
       (x.ui_y ?? null) !== (y.ui_y ?? null) ||
       (x.icon ?? null) !== (y.icon ?? null) ||
+      (x.anchor_location_id ?? null) !== (y.anchor_location_id ?? null) ||
       JSON.stringify(x.environmental_tags ?? []) !== JSON.stringify(y.environmental_tags ?? []) ||
       JSON.stringify(x.lore_nodes ?? []) !== JSON.stringify(y.lore_nodes ?? []) ||
       JSON.stringify(x.props ?? []) !== JSON.stringify(y.props ?? [])
@@ -1216,6 +1236,8 @@ export function areGraphSnapshotsEqual(a: GraphSnapshot, b: GraphSnapshot): bool
       (x.travel_mode ?? null) !== (y.travel_mode ?? null) ||
       Boolean(x.is_blocked) !== Boolean(y.is_blocked) ||
       Boolean(x.is_secret) !== Boolean(y.is_secret) ||
+      (x.distance_mode ?? "flexible") !== (y.distance_mode ?? "flexible") ||
+      Boolean(x.is_vertical) !== Boolean(y.is_vertical) ||
       JSON.stringify(x.obstacles ?? []) !== JSON.stringify(y.obstacles ?? [])
     ) {
       return false;

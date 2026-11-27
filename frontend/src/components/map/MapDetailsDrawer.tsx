@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Anchor,
   ArrowUpRight,
   ChevronDown,
   ChevronRight,
@@ -63,6 +64,10 @@ import type {
   ProjectedGhostEdge,
   ProjectedGhostExternalNode,
 } from "./topologyProjection";
+import {
+  getValidAnchorCandidates,
+  type ConsistencyReport,
+} from "./spatialConsistency";
 import type { EdgePairPatch } from "./useTopologyMutations";
 import type { WorldPromptContext } from "../../types";
 
@@ -191,6 +196,7 @@ export interface MapDetailsDrawerProps {
   onConvertToContainer?: (locId: string) => void;
   onMoveOutToParent?: (kind: "location" | "container", id: string) => void;
   onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
+  consistencyReport?: ConsistencyReport | null;
 }
 
 const MapIconPicker: React.FC<{
@@ -1042,6 +1048,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   onConvertToContainer,
   onMoveOutToParent,
   onOpenMechanicsHelp,
+  consistencyReport = null,
 }) => {
   const [lightboxImage, setLightboxImage] = useState<{
     url: string;
@@ -1242,6 +1249,16 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         onDeleteEdge={onDeleteEdge}
         canDeleteEdge={canDeleteEdge}
         onOpenMechanicsHelp={onOpenMechanicsHelp}
+        consistencyDiagnostic={
+          selectedEdgePair && consistencyReport
+            ? consistencyReport.diagnosticsByEdgeId[selectedEdgePair.primary.id] ?? null
+            : null
+        }
+        reconciliationAdjustment={
+          selectedEdgePair && consistencyReport
+            ? consistencyReport.proposedByEdgeId[selectedEdgePair.primary.id] ?? null
+            : null
+        }
       />
     );
   }
@@ -2149,6 +2166,97 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           </span>
         </div>
       )}
+
+      {/* External Spatial Anchor (for containerized Level 0 locations) */}
+      {selectedLocation.container_id && (() => {
+        const candidates = getValidAnchorCandidates(
+          selectedLocation,
+          containers,
+          allLocations,
+          allEdges
+        );
+        const anchorRes =
+          consistencyReport?.anchorResolutions[selectedLocation.id] ?? null;
+        const currentAnchorId = selectedLocation.anchor_location_id ?? "";
+        const anchorTargetName =
+          allLocations.find((l) => l.id === currentAnchorId)?.name ?? null;
+        return (
+          <div className="map-anchor-picker-card" data-testid="location-anchor-picker">
+            <div className="map-anchor-picker-header">
+              <label htmlFor="location-anchor-select" className="map-anchor-picker-label">
+                <Anchor size={11} color="#22d3ee" /> External Spatial Anchor
+              </label>
+              {currentAnchorId && !isMutatingLocked && (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: "1px 6px", fontSize: "0.64rem" }}
+                  onClick={() =>
+                    onPatchLocation(selectedLocation.id, {
+                      anchor_location_id: null,
+                    })
+                  }
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <select
+              id="location-anchor-select"
+              aria-label="External spatial anchor"
+              className="field-input field-input--compact field-input--cyan"
+              disabled={isMutatingLocked}
+              value={currentAnchorId}
+              onChange={(e) =>
+                onPatchLocation(selectedLocation.id, {
+                  anchor_location_id: e.target.value || null,
+                })
+              }
+            >
+              <option value="">None (Free-floating inside container)</option>
+              {candidates.connected.length > 0 && (
+                <optgroup label="Connected External Locations">
+                  {candidates.connected.map((c) => (
+                    <option key={c.location.id} value={c.location.id}>
+                      {c.location.name} ({c.breadcrumb} · {formatDistanceCompact(c.edge.distance_meters)})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {candidates.other.length > 0 && (
+                <optgroup label="Other External Locations">
+                  {candidates.other.map((c) => (
+                    <option key={c.location.id} value={c.location.id}>
+                      {c.location.name} ({c.breadcrumb})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+            {currentAnchorId && (
+              <div className="map-anchor-picker-summary">
+                {anchorRes?.valid ? (
+                  anchorRes.viaEdgeId ? (
+                    anchorRes.viaNonEuclidean ? (
+                      <>Pinned to <strong>{anchorRes.anchorLocationName}</strong> (0m offset · Non-Euclidean link)</>
+                    ) : anchorRes.viaVertical ? (
+                      <>Pinned to <strong>{anchorRes.anchorLocationName}</strong> (0m horizontal · vertical {anchorRes.viaDistanceMeters}m)</>
+                    ) : (
+                      <>Pinned to <strong>{anchorRes.anchorLocationName}</strong> ({anchorRes.viaDirection} {anchorRes.viaDistanceMeters}m)</>
+                    )
+                  ) : (
+                    <>Pinned to <strong>{anchorRes.anchorLocationName}</strong> (co-located reference)</>
+                  )
+                ) : anchorRes && !anchorRes.valid ? (
+                  <span style={{ color: "#fda4af" }}>{anchorRes.reason}</span>
+                ) : (
+                  <>Pinned to <strong>{anchorTargetName ?? currentAnchorId}</strong></>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Name */}
       <div className="field-group" style={{ gap: 4 }}>

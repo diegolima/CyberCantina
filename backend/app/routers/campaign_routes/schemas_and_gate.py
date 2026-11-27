@@ -15,6 +15,7 @@ from app.schemas.world import (
     MAX_EDGE_TRAVEL_MODE_LENGTH,
     MIN_EDGE_SPEED_MODIFIER,
     WALKING_METERS_PER_MINUTE,
+    EdgeDistanceMode,
     WorldLoreNodeDraft,
 )
 from app.schemas.party import LocationOverrideMoveMode
@@ -149,6 +150,8 @@ class CampaignEdgeCreateRequest(BaseModel):
     obstacles: list[str] = Field(default_factory=list)
     is_blocked: bool = False
     is_secret: bool = False
+    distance_mode: EdgeDistanceMode = "flexible"
+    is_vertical: bool = False
     bidirectional: bool = True
 
     @model_validator(mode="before")
@@ -168,6 +171,8 @@ class CampaignEdgeDistanceUpdateRequest(BaseModel):
     obstacles: list[str] | None = None
     is_blocked: bool | None = None
     is_secret: bool | None = None
+    distance_mode: EdgeDistanceMode | None = None
+    is_vertical: bool | None = None
     direction_label: str | None = Field(default=None, max_length=120)
     reciprocal_direction_label: str | None = Field(default=None, max_length=120)
     update_reciprocal: bool = True

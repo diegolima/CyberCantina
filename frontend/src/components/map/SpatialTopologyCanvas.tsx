@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Anchor,
+  ArrowUpDown,
   Check,
   Crosshair,
   DoorOpen,
@@ -13,6 +15,7 @@ import {
   MapPin,
   Plus,
   RotateCcw,
+  Sparkles,
   X,
 } from "lucide-react";
 import type {
@@ -24,6 +27,11 @@ import type {
 import { resolveMapIconComponent } from "./mapIcons";
 import type { MapContextMenuState } from "./MapDialogs";
 import type { PaletteItemKind } from "./MapPaletteBar";
+import type {
+  ConsistencyReport,
+  EdgeConsistencyDiagnostic,
+  ReconciliationAdjustment,
+} from "./spatialConsistency";
 import {
   CONTAINER_CARD_H,
   CONTAINER_CARD_RX,
@@ -159,6 +167,14 @@ export interface SpatialTopologyCanvasProps {
   isAutoLayoutPreviewing?: boolean;
   onApplyAutoLayout?: () => void;
   onResetAutoLayout?: () => void;
+  consistencyReport?: ConsistencyReport | null;
+  reconcilePreview?: {
+    containerId: string | null;
+    adjustments: ReconciliationAdjustment[];
+    byEdgeId: Record<string, ReconciliationAdjustment>;
+  } | null;
+  onApplyReconcilePreview?: () => void;
+  onCancelReconcilePreview?: () => void;
 }
 
 export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
@@ -223,6 +239,10 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   isAutoLayoutPreviewing = false,
   onApplyAutoLayout,
   onResetAutoLayout,
+  consistencyReport = null,
+  reconcilePreview = null,
+  onApplyReconcilePreview,
+  onCancelReconcilePreview,
 }) => {
   const [isPanning, setIsPanning] = useState(false);
   const [isPinching, setIsPinching] = useState(false);
@@ -738,10 +758,37 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         edge.isAggregated && passagePairCount > 1 ? ` · ${passagePairCount}` : "";
       const blockedCue = edge.containsBlockedEdge;
       const secretCue = edge.containsUndiscoveredSecretEdge;
-      const iconCount = (blockedCue ? 1 : 0) + (secretCue ? 1 : 0);
+      const edgesInGroup =
+        edge.isAggregated && edge.groupedEdges?.length
+          ? edge.groupedEdges
+          : [edge.rawEdge];
+      const hasLockedCue = edgesInGroup.some(
+        (ge) => (ge.distance_mode ?? "flexible") === "locked"
+      );
+      const hasNonEuclideanCue = edgesInGroup.some(
+        (ge) => (ge.distance_mode ?? "flexible") === "non_euclidean"
+      );
+      const hasVerticalCue = edgesInGroup.some((ge) => Boolean(ge.is_vertical));
+      const edgeDiag: EdgeConsistencyDiagnostic | null =
+        edgesInGroup
+          .map((ge) => consistencyReport?.diagnosticsByEdgeId[ge.id])
+          .find(Boolean) ?? null;
+      const reconcileAdj: ReconciliationAdjustment | null =
+        edgesInGroup
+          .map((ge) => reconcilePreview?.byEdgeId[ge.id])
+          .find(Boolean) ?? null;
+      const iconCount =
+        (blockedCue ? 1 : 0) +
+        (secretCue ? 1 : 0) +
+        (hasNonEuclideanCue ? 1 : 0) +
+        (hasLockedCue ? 1 : 0) +
+        (hasVerticalCue ? 1 : 0) +
+        (edgeDiag ? 1 : 0);
       const extraIconW = iconCount > 0 ? iconCount * 10 + 2 : 0;
 
-      const distanceLabelText = `${formatDistanceCompact(edge.distance_meters)}${aggSuffix}`;
+      const distanceLabelText = reconcileAdj
+        ? `${formatDistanceCompact(reconcileAdj.currentMeters)} → ${formatDistanceCompact(reconcileAdj.proposedMeters)}${aggSuffix}`
+        : `${formatDistanceCompact(edge.distance_meters)}${aggSuffix}`;
       const timeDurationText =
         edge.isAggregated &&
         edge.groupedEdges &&
@@ -795,9 +842,13 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         edge.travel_mode
       );
       const statusCues: string[] = [];
+      if (hasLockedCue) statusCues.push("Locked Distance");
+      if (hasNonEuclideanCue) statusCues.push("Non-Euclidean");
+      if (hasVerticalCue) statusCues.push("Vertical");
       if (blockedCue) statusCues.push("Blocked");
       if (secretCue) statusCues.push("Secret · Hidden");
       else if (edge.is_secret) statusCues.push("Secret · Discovered");
+      if (edgeDiag) statusCues.push(edgeDiag.message);
       if (edge.containsObstacles && !edge.isAggregated && edge.obstacles.length > 0) {
         statusCues.push(`Obstacles: ${edge.obstacles.join(", ")}`);
       }
@@ -822,6 +873,11 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         isSelected,
         blockedCue,
         secretCue,
+        hasLockedCue,
+        hasNonEuclideanCue,
+        hasVerticalCue,
+        edgeDiag,
+        reconcileAdj,
         extraIconW,
         showLabel,
         labelText,
@@ -941,6 +997,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     selectedBundleEdgeIds,
     selectedPairEndpointKey,
     previewTimePairKeys,
+    consistencyReport,
+    reconcilePreview,
   ]);
 
   const activeInlineEdge = useMemo(() => {
@@ -1225,6 +1283,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     isSelected,
                     blockedCue,
                     secretCue,
+                    hasNonEuclideanCue,
+                    hasVerticalCue,
+                    reconcileAdj,
                     hoverTitle,
                     passagePairCount,
                     pairKey,
@@ -1236,10 +1297,14 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                   );
                   const lineStroke = isPortPreviewed
                     ? "#fbbf24"
+                    : reconcileAdj
+                    ? "#fbbf24"
                     : isSelected
                     ? "#22d3ee"
                     : secretCue
                     ? "#a78bfa"
+                    : hasNonEuclideanCue
+                    ? "#c084fc"
                     : isGhost
                     ? isDirect
                       ? "#22d3ee"
@@ -1253,10 +1318,14 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     : "#334155";
                   const lineDash = secretCue
                     ? "6 4"
+                    : hasNonEuclideanCue
+                    ? "7 3 2 3"
                     : isGhost
                     ? "5 4"
                     : blockedCue
                     ? "4 3"
+                    : hasVerticalCue
+                    ? "2 3"
                     : edge.isAggregated
                     ? "2 2"
                     : undefined;
@@ -1410,6 +1479,11 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     isSelected,
                     blockedCue,
                     secretCue,
+                    hasLockedCue,
+                    hasNonEuclideanCue,
+                    hasVerticalCue,
+                    edgeDiag,
+                    reconcileAdj,
                     extraIconW,
                     showLabel,
                     labelText,
@@ -1434,18 +1508,104 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     );
                     const badgeStroke = isPortPreviewed
                       ? "#fbbf24"
+                      : reconcileAdj
+                      ? "#fbbf24"
                       : isSelected
                       ? "#22d3ee"
+                      : edgeDiag
+                      ? edgeDiag.severity === "error"
+                        ? "#fb7185"
+                        : "#fbbf24"
                       : isTimePreview
                       ? "#f59e0b"
+                      : hasNonEuclideanCue
+                      ? "#c084fc"
                       : secretCue
                       ? "#a78bfa"
                       : blockedCue
                       ? "#fb7185"
+                      : hasLockedCue
+                      ? "#38bdf8"
                       : isDirect
                       ? "#0891b2"
                       : "#334155";
                     const iconStartX = clipped.midX - badgeWidth / 2 + 4;
+                    let iconCursorX = iconStartX;
+                    const badgeIcons: React.ReactNode[] = [];
+                    if (secretCue) {
+                      badgeIcons.push(
+                        <EyeOff
+                          key="secret"
+                          size={8.5}
+                          x={iconCursorX}
+                          y={clipped.midY - 5.25}
+                          color="#c084fc"
+                        />
+                      );
+                      iconCursorX += 10;
+                    }
+                    if (blockedCue) {
+                      badgeIcons.push(
+                        <Lock
+                          key="blocked"
+                          size={8.5}
+                          x={iconCursorX}
+                          y={clipped.midY - 5.25}
+                          color="#fb7185"
+                        />
+                      );
+                      iconCursorX += 10;
+                    }
+                    if (hasNonEuclideanCue) {
+                      badgeIcons.push(
+                        <Sparkles
+                          key="noneuc"
+                          size={8.5}
+                          x={iconCursorX}
+                          y={clipped.midY - 5.25}
+                          color="#c084fc"
+                        />
+                      );
+                      iconCursorX += 10;
+                    }
+                    if (hasLockedCue) {
+                      badgeIcons.push(
+                        <Lock
+                          key="locked"
+                          size={8.5}
+                          x={iconCursorX}
+                          y={clipped.midY - 5.25}
+                          color="#38bdf8"
+                        />
+                      );
+                      iconCursorX += 10;
+                    }
+                    if (hasVerticalCue) {
+                      badgeIcons.push(
+                        <ArrowUpDown
+                          key="vertical"
+                          size={8.5}
+                          x={iconCursorX}
+                          y={clipped.midY - 5.25}
+                          color="#6ee7b7"
+                        />
+                      );
+                      iconCursorX += 10;
+                    }
+                    if (edgeDiag) {
+                      badgeIcons.push(
+                        <AlertTriangle
+                          key="diag"
+                          size={8.5}
+                          x={iconCursorX}
+                          y={clipped.midY - 5.25}
+                          color={
+                            edgeDiag.severity === "error" ? "#fb7185" : "#fbbf24"
+                          }
+                        />
+                      );
+                      iconCursorX += 10;
+                    }
                     return (
                       <g
                         key={`badge-${edge.id}`}
@@ -1516,30 +1676,17 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           stroke={badgeStroke}
                           strokeWidth={isSelected ? 1.4 : 1}
                         />
-                        {secretCue && (
-                          <EyeOff
-                            size={8.5}
-                            x={iconStartX}
-                            y={clipped.midY - 5.25}
-                            color="#c084fc"
-                          />
-                        )}
-                        {blockedCue && (
-                          <Lock
-                            size={8.5}
-                            x={secretCue ? iconStartX + 10 : iconStartX}
-                            y={clipped.midY - 5.25}
-                            color="#fb7185"
-                          />
-                        )}
+                        {badgeIcons}
                         <text
                           x={clipped.midX + extraIconW / 2}
                           y={clipped.midY + 2}
                           textAnchor="middle"
                           fill={
-                            isTimePreview
+                            reconcileAdj
                               ? "#fde68a"
-                              : secretCue
+                              : isTimePreview
+                              ? "#fde68a"
+                              : secretCue || hasNonEuclideanCue
                               ? "#ddd6fe"
                               : isSelected || isDirect
                               ? "#67e8f9"
@@ -2054,6 +2201,28 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         </g>
                       )}
 
+                      {/* External Spatial Anchor Pin Badge */}
+                      {Boolean(loc.anchor_location_id) && (
+                        <g>
+                          <title>Anchored to external spatial reference</title>
+                          <circle
+                            cx={pt.x - 17}
+                            cy={pt.y + 14}
+                            r={6.5}
+                            fill="#082f49"
+                            stroke="#38bdf8"
+                            strokeWidth={1.2}
+                          />
+                          <Anchor
+                            x={pt.x - 20.5}
+                            y={pt.y + 10.5}
+                            width={7}
+                            height={7}
+                            stroke="#7dd3fc"
+                          />
+                        </g>
+                      )}
+
                       {/* Unlinked / Unreachable warning dot */}
                       {isUnreachable && (
                         <g>
@@ -2487,8 +2656,11 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                       );
                     }}
                     onContextMenu={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
+                      handleSvgContextMenu(e, {
+                        kind: "ghost",
+                        externalLocationId: ghost.destination.id,
+                        connectedPortalIds: ghost.connectedPortalIds,
+                      });
                     }}
                   >
                     <rect
@@ -2854,6 +3026,46 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               </div>
             </div>
           )}
+
+          {reconcilePreview &&
+            onApplyReconcilePreview &&
+            onCancelReconcilePreview && (
+              <div
+                className="map-auto-layout-preview-bar"
+                role="region"
+                aria-label="Distance reconciliation preview controls"
+                data-testid="map-reconcile-preview-bar"
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <span className="map-auto-layout-preview-label">
+                  <Sparkles size={13} aria-hidden="true" />
+                  <span>
+                    Reconcile Distances ({reconcilePreview.adjustments.length}{" "}
+                    link{reconcilePreview.adjustments.length === 1 ? "" : "s"})
+                  </span>
+                </span>
+                <div className="map-auto-layout-preview-actions">
+                  <button
+                    type="button"
+                    className="btn btn-cyan map-auto-layout-preview-btn"
+                    onClick={onApplyReconcilePreview}
+                    data-testid="map-reconcile-apply-btn"
+                  >
+                    <Check size={13} />
+                    <span>Apply</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn map-auto-layout-preview-btn"
+                    onClick={onCancelReconcilePreview}
+                    data-testid="map-reconcile-cancel-btn"
+                  >
+                    <X size={13} />
+                    <span>Cancel</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
           {/* Transient feedback pill */}
           {statusNotice && !nodeDrag?.hasMoved && (

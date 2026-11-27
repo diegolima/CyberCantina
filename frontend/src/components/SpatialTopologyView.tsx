@@ -57,6 +57,13 @@ import {
 } from "./map/mapValidation";
 import { PortalPromotionModal } from "./map/PortalPromotionModal";
 import { type MapSearchMatch } from "./map/mapSearch";
+import { MapConsistencyPanel } from "./map/MapConsistencyPanel";
+import {
+  analyzeSpatialConsistency,
+  analyzeWorldConsistencySummary,
+  type EdgeConsistencyDiagnostic,
+  type ReconciliationAdjustment,
+} from "./map/spatialConsistency";
 import { SpatialTopologyCanvas } from "./map/SpatialTopologyCanvas";
 import { TopologyHeaderToolbar } from "./map/TopologyHeaderToolbar";
 import {
@@ -317,11 +324,21 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     priorPan: { x: number; y: number };
     priorZoom: number;
   }
+  interface ReconcilePreviewState {
+    containerId: string | null;
+    adjustments: ReconciliationAdjustment[];
+    byEdgeId: Record<string, ReconciliationAdjustment>;
+  }
   const [autoLayoutPreview, setAutoLayoutPreview] =
     useState<AutoLayoutPreviewState | null>(null);
+  const [reconcilePreview, setReconcilePreview] =
+    useState<ReconcilePreviewState | null>(null);
+  const [isConsistencyPanelOpen, setIsConsistencyPanelOpen] = useState(false);
+  const [autoSyncConsistency, setAutoSyncConsistency] = useState(false);
   const canAutoLayout = (mode === "editor" || unlockLore) && !isMutatingLocked;
   const isPreviewingAutoLayout = autoLayoutPreview !== null;
-  const effectiveMutatingLocked = isMutatingLocked || isPreviewingAutoLayout;
+  const effectiveMutatingLocked =
+    isMutatingLocked || isPreviewingAutoLayout || Boolean(reconcilePreview);
 
   const commitNextGraph = useCallback(
     (next: GraphSnapshot, pushUndo = true) => {
@@ -774,6 +791,37 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     reachabilityReport.unreachableIds.length > 0 ||
     containerValidationErrors.length > 0;
 
+  const consistencyReport = useMemo(
+    () =>
+      analyzeSpatialConsistency({
+        scopeContainerId: currentContainerId,
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: workingEdges,
+        options: { mode, unlockLore, revealedEdgeIds },
+      }),
+    [
+      currentContainerId,
+      workingContainers,
+      workingLocations,
+      workingEdges,
+      mode,
+      unlockLore,
+      revealedEdgeIds,
+    ]
+  );
+
+  const worldConsistencySummary = useMemo(
+    () =>
+      analyzeWorldConsistencySummary({
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: workingEdges,
+        options: { mode, unlockLore, revealedEdgeIds },
+      }),
+    [workingContainers, workingLocations, workingEdges, mode, unlockLore, revealedEdgeIds]
+  );
+
   const settledFullMapCoords = useMemo(() => {
     const pseudoNodes: LocationNode[] = [
       ...projectedTopology.visibleLocations,
@@ -900,6 +948,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   const drillIntoContainer = useCallback((contId: string | null) => {
     setAutoLayoutPreview(null);
+    setReconcilePreview(null);
+    setIsConsistencyPanelOpen(false);
     setPendingCenterTarget(null);
     setCurrentContainerId(contId);
     setSelectedContainerId(null);
@@ -914,6 +964,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const handleJumpToContainer = useCallback(
     (targetContainerId: string | null, focusLocId?: string) => {
       setAutoLayoutPreview(null);
+      setReconcilePreview(null);
+      setIsConsistencyPanelOpen(false);
       setCurrentContainerId(targetContainerId);
       setSelectedContainerId(null);
       setSelectedGhostLocId(null);
@@ -1116,6 +1168,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     handleToggleEdgeSecret,
     handleDeleteEdge,
     handleDeleteEdgeGroup,
+    applyReconciliationAdjustments,
   } = useTopologyMutations({
     worldId,
     mode,
@@ -1172,6 +1225,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       });
     },
     setPromotionPrompt,
+    autoSyncConsistency,
+    unlockLore,
+    revealedEdgeIds,
   });
 
   const handleMoveGhostNode = useCallback(
@@ -1320,6 +1376,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setNodeDrag(null);
     setLinkDrag(null);
     setPortReassignDrag(null);
+    setReconcilePreview(null);
+    setIsConsistencyPanelOpen(false);
     setAutoLayoutPreview((prev) => ({
       containerId: currentContainerId,
       coords,
@@ -1397,6 +1455,90 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       setAutoLayoutPreview(null);
     }
   }, [autoLayoutPreview, canAutoLayout, currentContainerId]);
+
+  useEffect(() => {
+    if (reconcilePreview && reconcilePreview.containerId !== currentContainerId) {
+      setReconcilePreview(null);
+    }
+  }, [reconcilePreview, currentContainerId]);
+
+  const handleStartReconcilePreview = useCallback(() => {
+    if (
+      isMutatingLocked ||
+      consistencyReport.proposedAdjustments.length === 0
+    ) {
+      return;
+    }
+    if (autoLayoutPreview) {
+      setPan(autoLayoutPreview.priorPan);
+      setZoom(autoLayoutPreview.priorZoom);
+      setAutoLayoutPreview(null);
+    }
+    setIsConsistencyPanelOpen(false);
+    setContextMenu(null);
+    setInlineEdgeEdit(null);
+    setReconcilePreview({
+      containerId: currentContainerId,
+      adjustments: consistencyReport.proposedAdjustments,
+      byEdgeId: consistencyReport.proposedByEdgeId,
+    });
+  }, [
+    isMutatingLocked,
+    consistencyReport,
+    autoLayoutPreview,
+    currentContainerId,
+  ]);
+
+  const handleApplyReconcilePreview = useCallback(() => {
+    if (!reconcilePreview || isMutatingLocked) return;
+    applyReconciliationAdjustments(reconcilePreview.adjustments);
+    setReconcilePreview(null);
+  }, [reconcilePreview, isMutatingLocked, applyReconciliationAdjustments]);
+
+  const handleCancelReconcilePreview = useCallback(() => {
+    setReconcilePreview(null);
+  }, []);
+
+  const handleApplySingleAdjustment = useCallback(
+    (adj: ReconciliationAdjustment) => {
+      if (effectiveMutatingLocked) return;
+      applyReconciliationAdjustments([adj]);
+    },
+    [effectiveMutatingLocked, applyReconciliationAdjustments]
+  );
+
+  const handleMarkNonEuclidean = useCallback(
+    (edgeId: string) => {
+      if (effectiveMutatingLocked) return;
+      handlePatchEdgePair(edgeId, { distance_mode: "non_euclidean" });
+    },
+    [effectiveMutatingLocked, handlePatchEdgePair]
+  );
+
+  const handleJumpToDiagnostic = useCallback(
+    (diag: EdgeConsistencyDiagnostic) => {
+      setIsConsistencyPanelOpen(false);
+      if (
+        diag.kind === "anchor_invalid" ||
+        diag.kind === "anchor_disconnected"
+      ) {
+        if (diag.scopeContainerId !== currentContainerId) {
+          handleJumpToContainer(diag.scopeContainerId, diag.fromLocationId);
+        } else {
+          setSelectedContainerId(null);
+          setSelectedGhostLocId(null);
+          setSelectedEdgeState(null);
+          setSelectedLocId(diag.fromLocationId);
+        }
+        return;
+      }
+      if (diag.scopeContainerId !== currentContainerId) {
+        handleJumpToContainer(diag.scopeContainerId);
+      }
+      selectEdgePair(diag.primaryEdgeId);
+    },
+    [currentContainerId, handleJumpToContainer, selectEdgePair]
+  );
 
   const capturePendingSelectionSnapshot = () => {
     const selLoc = selectedLocId
@@ -1491,6 +1633,22 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key === "Escape" &&
+        !e.repeat &&
+        (isConsistencyPanelOpen || Boolean(reconcilePreview)) &&
+        !hasBlockingOverlayOpen &&
+        !isEditableKeyboardTarget(e.target, topologyRootRef.current) &&
+        !isEditableKeyboardTarget(
+          typeof document !== "undefined" ? document.activeElement : null,
+          topologyRootRef.current
+        )
+      ) {
+        e.preventDefault();
+        if (isConsistencyPanelOpen) setIsConsistencyPanelOpen(false);
+        if (reconcilePreview) setReconcilePreview(null);
+        return;
+      }
       if (
         e.key === "Escape" &&
         !e.repeat &&
@@ -1755,6 +1913,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       }}
       onClick={() => {
         if (contextMenu) setContextMenu(null);
+        if (isConsistencyPanelOpen) setIsConsistencyPanelOpen(false);
       }}
     >
       <TopologyHeaderToolbar
@@ -1787,6 +1946,33 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         autoLayoutDisabled={!hasAutoLayoutTargets}
         isAutoLayoutPreviewing={isPreviewingAutoLayout}
         onPreviewAutoLayout={handleStartAutoLayoutPreview}
+        consistencyIssueCount={
+          worldConsistencySummary.totalErrors +
+          worldConsistencySummary.totalWarnings +
+          worldConsistencySummary.totalInfos
+        }
+        consistencyErrorCount={worldConsistencySummary.totalErrors}
+        isConsistencyPanelOpen={isConsistencyPanelOpen}
+        onToggleConsistencyPanel={() =>
+          setIsConsistencyPanelOpen((prev) => !prev)
+        }
+        consistencyPopover={
+          <MapConsistencyPanel
+            isOpen={isConsistencyPanelOpen}
+            currentContainerId={currentContainerId}
+            currentReport={consistencyReport}
+            worldSummary={worldConsistencySummary}
+            isMutatingLocked={effectiveMutatingLocked}
+            isPreviewingReconcile={Boolean(reconcilePreview)}
+            autoSyncEnabled={autoSyncConsistency}
+            onToggleAutoSync={setAutoSyncConsistency}
+            onStartReconcilePreview={handleStartReconcilePreview}
+            onApplySingleAdjustment={handleApplySingleAdjustment}
+            onMarkNonEuclidean={handleMarkNonEuclidean}
+            onJumpToDiagnostic={handleJumpToDiagnostic}
+            onClose={() => setIsConsistencyPanelOpen(false)}
+          />
+        }
       />
 
       {/* Draggable Node Palette Bar + Undo + Validation Status */}
@@ -1926,6 +2112,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             isAutoLayoutPreviewing={isPreviewingAutoLayout}
             onApplyAutoLayout={handleApplyAutoLayoutPreview}
             onResetAutoLayout={handleResetAutoLayoutPreview}
+            consistencyReport={consistencyReport}
+            reconcilePreview={reconcilePreview}
+            onApplyReconcilePreview={handleApplyReconcilePreview}
+            onCancelReconcilePreview={handleCancelReconcilePreview}
           />
 
           {/* Context Menu & Dialogs */}
@@ -2024,6 +2214,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onToggleEdgeSecret={handleToggleEdgeSecret}
             onDeleteEdge={handleDeleteEdge}
             onDeleteEdgeGroup={handleDeleteEdgeGroup}
+            onSetLocationAnchor={(locId, anchorId) =>
+              patchLocation(locId, { anchor_location_id: anchorId }, true)
+            }
           />
 
           <PassageHubCollisionModal
@@ -2205,6 +2398,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               onConvertToContainer={handleConvertLocationToContainer}
               onMoveOutToParent={handleMoveOutToParent}
               onOpenMechanicsHelp={onOpenMechanicsHelp}
+              consistencyReport={consistencyReport}
             />
           ) : null;
 

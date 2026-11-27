@@ -295,6 +295,8 @@ export const campaignsApi = {
       obstacles?: string[];
       is_blocked?: boolean;
       is_secret?: boolean;
+      distance_mode?: "flexible" | "locked" | "non_euclidean";
+      is_vertical?: boolean;
       bidirectional?: boolean;
     }
   ) =>
@@ -313,6 +315,8 @@ export const campaignsApi = {
       obstacles?: string[];
       is_blocked?: boolean;
       is_secret?: boolean;
+      distance_mode?: "flexible" | "locked" | "non_euclidean";
+      is_vertical?: boolean;
       direction_label?: string;
       reciprocal_direction_label?: string;
       update_reciprocal?: boolean;

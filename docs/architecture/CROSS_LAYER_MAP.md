@@ -816,6 +816,7 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/components/map/MapConsistencyPanel.tsx` |
 | `frontend/src/components/map/MapDetailsDrawer.tsx` |
 | `frontend/src/components/map/MapDialogs.tsx` |
 | `frontend/src/components/map/MapLinkInspectorSection.tsx` |
@@ -831,6 +832,7 @@ erDiagram
 | `frontend/src/components/map/mapIcons.ts` |
 | `frontend/src/components/map/mapSearch.ts` |
 | `frontend/src/components/map/mapValidation.ts` |
+| `frontend/src/components/map/spatialConsistency.ts` |
 | `frontend/src/components/map/topologyProjection.ts` |
 | `frontend/src/components/map/useTopologyMutations.ts` |
 | `frontend/src/components/map/useTopologyPointerDrag.ts` |

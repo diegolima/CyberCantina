@@ -16,11 +16,14 @@ from app.schemas.world import (
     LocationNode,
     is_edge_revealed,
     normalize_compass_direction,
+    normalize_edge_distance_mode,
+    normalize_edge_is_vertical,
     normalize_edge_obstacles,
     normalize_edge_speed_modifier,
     normalize_edge_travel_mode,
     parse_ghost_coords_json,
     remap_ghost_coords_dict,
+    sanitize_location_anchors,
     validate_world_reachability,
 )
 from app.db.repos.base import (
@@ -228,15 +231,24 @@ class CampaignMapUpdateMixin:
                         raise ValueError(
                             f"Cannot modify name, summary, description, tags, or hub role of visited location '{orig_loc.name}'."
                         )
+            raw_anchor = getattr(loc, "anchor_location_id", None)
+            mapped_anchor = (
+                loc_id_remap.get(raw_anchor, raw_anchor)
+                if isinstance(raw_anchor, str) and raw_anchor.strip()
+                else None
+            )
             new_locs.append(
                 loc.model_copy(
                     update={
                         "id": mapped_id,
                         "world_id": campaign.world_id,
                         "container_id": mapped_cont,
+                        "anchor_location_id": mapped_anchor,
                     }
                 )
             )
+
+        sanitize_location_anchors(list(new_cont_map.values()), new_locs)
 
         valid_mapped_loc_ids = {l.id for l in new_locs}
         for cid, nc in list(new_cont_map.items()):
@@ -425,9 +437,9 @@ class CampaignMapUpdateMixin:
                         INSERT INTO location_nodes (
                             id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
                             is_entry_exit, name, summary, description, environmental_tags_json,
-                            is_starting_location, is_hub, starting_message, ui_x, ui_y, icon
+                            is_starting_location, is_hub, starting_message, ui_x, ui_y, icon, anchor_location_id
                         )
-                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             nloc.id,
@@ -444,6 +456,7 @@ class CampaignMapUpdateMixin:
                             nloc.ui_x,
                             nloc.ui_y,
                             nloc.icon,
+                            nloc.anchor_location_id,
                         ),
                     )
                     for p_idx, prop in enumerate(getattr(nloc, "props", None) or []):
@@ -484,6 +497,7 @@ class CampaignMapUpdateMixin:
                         or nloc.ui_x != orig_loc.ui_x
                         or nloc.ui_y != orig_loc.ui_y
                         or nloc.icon != orig_loc.icon
+                        or nloc.anchor_location_id != orig_loc.anchor_location_id
                     )
                     if orig_loc.created_at_turn_id == leaf_turn_id:
                         if changed:
@@ -492,7 +506,8 @@ class CampaignMapUpdateMixin:
                                 UPDATE location_nodes
                                 SET container_id = ?, is_entry_exit = ?, name = ?, summary = ?,
                                     description = ?, environmental_tags_json = ?, is_hub = ?,
-                                    starting_message = ?, ui_x = ?, ui_y = ?, icon = ?
+                                    starting_message = ?, ui_x = ?, ui_y = ?, icon = ?,
+                                    anchor_location_id = ?
                                 WHERE id = ?
                                 """,
                                 (
@@ -507,12 +522,13 @@ class CampaignMapUpdateMixin:
                                     nloc.ui_x,
                                     nloc.ui_y,
                                     nloc.icon,
+                                    nloc.anchor_location_id,
                                     nloc.id,
                                 ),
                             )
                     elif changed or ("location", nloc.id) in existing_leaf_override_keys:
                         raw_loc = raw_locs[nloc.id]
-                        meta_dict = {}
+                        meta_dict: dict[str, Any] = {}
                         if nloc.name.strip() != raw_loc.name.strip():
                             meta_dict["name"] = nloc.name.strip()
                         if nloc.summary != raw_loc.summary:
@@ -525,6 +541,8 @@ class CampaignMapUpdateMixin:
                             meta_dict["is_hub"] = bool(nloc.is_hub)
                         if nloc.starting_message != raw_loc.starting_message:
                             meta_dict["starting_message"] = nloc.starting_message
+                        if nloc.anchor_location_id != raw_loc.anchor_location_id:
+                            meta_dict["anchor_location_id"] = nloc.anchor_location_id
                         conn.execute(
                             """
                             INSERT OR REPLACE INTO campaign_spatial_overrides (
@@ -642,6 +660,18 @@ class CampaignMapUpdateMixin:
                     orig_mode = normalize_edge_travel_mode(orig_e.travel_mode)
                     sub_obs = normalize_edge_obstacles(sub_e.obstacles)
                     orig_obs = normalize_edge_obstacles(orig_e.obstacles)
+                    sub_dist_mode = normalize_edge_distance_mode(
+                        getattr(sub_e, "distance_mode", "flexible")
+                    )
+                    orig_dist_mode = normalize_edge_distance_mode(
+                        getattr(orig_e, "distance_mode", "flexible")
+                    )
+                    sub_vertical = normalize_edge_is_vertical(
+                        getattr(sub_e, "is_vertical", False)
+                    )
+                    orig_vertical = normalize_edge_is_vertical(
+                        getattr(orig_e, "is_vertical", False)
+                    )
                     edge_changed = (
                         sub_e.from_location_id != orig_e.from_location_id
                         or sub_e.to_location_id != orig_e.to_location_id
@@ -653,6 +683,8 @@ class CampaignMapUpdateMixin:
                         or sub_obs != orig_obs
                         or bool(sub_e.is_blocked) != bool(orig_e.is_blocked)
                         or bool(sub_e.is_secret) != bool(orig_e.is_secret)
+                        or sub_dist_mode != orig_dist_mode
+                        or sub_vertical != orig_vertical
                     )
                     if edge_changed:
                         if orig_e.created_at_turn_id == leaf_turn_id:
@@ -661,7 +693,8 @@ class CampaignMapUpdateMixin:
                                 UPDATE location_edges
                                 SET from_location_id = ?, to_location_id = ?, direction_label = ?,
                                     compass_direction = ?, distance_meters = ?, speed_modifier = ?,
-                                    travel_mode = ?, obstacles_json = ?, is_blocked = ?, is_secret = ?
+                                    travel_mode = ?, obstacles_json = ?, is_blocked = ?, is_secret = ?,
+                                    distance_mode = ?, is_vertical = ?
                                 WHERE id = ?
                                 """,
                                 (
@@ -675,6 +708,8 @@ class CampaignMapUpdateMixin:
                                     json.dumps(sub_obs),
                                     1 if sub_e.is_blocked else 0,
                                     1 if sub_e.is_secret else 0,
+                                    sub_dist_mode,
+                                    1 if sub_vertical else 0,
                                     orig_eid,
                                 ),
                             )
@@ -699,9 +734,9 @@ class CampaignMapUpdateMixin:
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id, direction_label,
                         compass_direction, distance_meters, speed_modifier, travel_mode,
-                        obstacles_json, is_blocked, is_secret, created_at_turn_id
+                        obstacles_json, is_blocked, is_secret, distance_mode, is_vertical, created_at_turn_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ins_eid,
@@ -716,6 +751,8 @@ class CampaignMapUpdateMixin:
                         json.dumps(normalize_edge_obstacles(ne.obstacles)),
                         1 if ne.is_blocked else 0,
                         1 if ne.is_secret else 0,
+                        normalize_edge_distance_mode(getattr(ne, "distance_mode", "flexible")),
+                        1 if normalize_edge_is_vertical(getattr(ne, "is_vertical", False)) else 0,
                         leaf_turn_id,
                     ),
                 )

@@ -63,6 +63,7 @@ from app.schemas.world import (
     CANONICAL_WORLD_RECORD_KEYS,
     WorldGlobalRules,
     WorldRecord,
+    extract_edge_consistency_fields,
     extract_edge_distance_meters,
     extract_edge_link_fields,
     extract_world_unsupported_fields,
@@ -2089,15 +2090,23 @@ async def commit_staged_import(
                             if old_loc_media and id_remap.get(old_loc_media) in valid_imported_media_ids
                             else None
                         )
+                        old_anchor_id = loc.get("anchor_location_id")
+                        mapped_anchor_id = (
+                            id_remap.get(old_anchor_id)
+                            if old_anchor_id and old_anchor_id in id_remap and old_anchor_id != old_loc_id
+                            else None
+                        )
+                        if not mapped_loc_cont_id:
+                            mapped_anchor_id = None
                         conn.execute(
                             """
                             INSERT INTO location_nodes (
                                 id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
                                 name, summary, description, environmental_tags_json,
                                 is_starting_location, is_hub, is_entry_exit, starting_message,
-                                ui_x, ui_y, icon, image_media_id
+                                ui_x, ui_y, icon, image_media_id, anchor_location_id
                             )
-                            VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 new_loc_id,
@@ -2115,6 +2124,7 @@ async def commit_staged_import(
                                 loc.get("ui_y"),
                                 loc.get("icon"),
                                 mapped_loc_media,
+                                mapped_anchor_id,
                             ),
                         )
 
@@ -2262,15 +2272,17 @@ async def commit_staged_import(
                         speed_modifier, travel_mode, obstacles, is_blocked, is_secret = (
                             extract_edge_link_fields(edge)
                         )
+                        distance_mode, is_vertical = extract_edge_consistency_fields(edge)
                         conn.execute(
                             """
                             INSERT INTO location_edges (
                                 id, world_id, from_location_id, to_location_id,
                                 direction_label, compass_direction, distance_meters,
                                 speed_modifier, travel_mode, obstacles_json,
-                                is_blocked, is_secret, created_at_turn_id, superseded_at_turn_id
+                                is_blocked, is_secret, distance_mode, is_vertical,
+                                created_at_turn_id, superseded_at_turn_id
                             )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                             """,
                             (
                                 new_edge_id,
@@ -2285,6 +2297,8 @@ async def commit_staged_import(
                                 json.dumps(obstacles),
                                 1 if is_blocked else 0,
                                 1 if is_secret else 0,
+                                distance_mode,
+                                1 if is_vertical else 0,
                             ),
                         )
 

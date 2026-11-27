@@ -148,7 +148,7 @@ flowchart TD
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/chat` | 23 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
 | `components/inspector` | 7 | `components/map`, `components/world`, `hooks`, `types`, `utils` |
-| `components/map` | 18 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
+| `components/map` | 20 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
 | `components/party` | 1 | `components/shared`, `hooks`, `types`, `utils` |
 | `components/prompts` | 3 | *(leaf)* |

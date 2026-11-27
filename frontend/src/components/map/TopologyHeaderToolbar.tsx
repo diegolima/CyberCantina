@@ -1,6 +1,8 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Check,
+  CheckCircle2,
   ChevronRight,
   Compass,
   FolderOpen,
@@ -46,6 +48,11 @@ export interface TopologyHeaderToolbarProps {
   autoLayoutDisabled?: boolean;
   isAutoLayoutPreviewing?: boolean;
   onPreviewAutoLayout?: () => void;
+  consistencyIssueCount?: number;
+  consistencyErrorCount?: number;
+  isConsistencyPanelOpen?: boolean;
+  onToggleConsistencyPanel?: () => void;
+  consistencyPopover?: React.ReactNode;
 }
 
 export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
@@ -76,6 +83,11 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
   autoLayoutDisabled = false,
   isAutoLayoutPreviewing = false,
   onPreviewAutoLayout,
+  consistencyIssueCount = 0,
+  consistencyErrorCount = 0,
+  isConsistencyPanelOpen = false,
+  onToggleConsistencyPanel,
+  consistencyPopover = null,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -369,6 +381,53 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
             >
               <Search size={15} />
             </button>
+          )}
+
+          {onToggleConsistencyPanel && (
+            <div className="map-consistency-trigger-wrap">
+              <button
+                type="button"
+                className={`btn ${
+                  isMobileViewport ? "map-toolbar-icon-btn" : "map-toolbar-action-btn"
+                }${isConsistencyPanelOpen ? " active" : ""}${
+                  consistencyErrorCount > 0
+                    ? " map-consistency-btn--error"
+                    : consistencyIssueCount > 0
+                    ? " map-consistency-btn--warn"
+                    : ""
+                }`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleConsistencyPanel();
+                }}
+                title={
+                  consistencyIssueCount > 0
+                    ? `${consistencyIssueCount} spatial distance consistency issue(s) — click to inspect & reconcile`
+                    : "Spatial distance consistency — all distances aligned"
+                }
+                aria-label="Spatial Distance Consistency"
+                aria-expanded={isConsistencyPanelOpen}
+                data-testid="map-consistency-btn"
+              >
+                {consistencyIssueCount > 0 ? (
+                  <AlertTriangle
+                    size={isMobileViewport ? 15 : 13}
+                    color={consistencyErrorCount > 0 ? "#fb7185" : "#fbbf24"}
+                  />
+                ) : (
+                  <CheckCircle2 size={isMobileViewport ? 15 : 13} color="#34d399" />
+                )}
+                {!isMobileViewport && (
+                  <span className="map-toolbar-btn-label">Consistency</span>
+                )}
+                {consistencyIssueCount > 0 && (
+                  <span className="map-consistency-count-pill">
+                    {consistencyIssueCount}
+                  </span>
+                )}
+              </button>
+              {consistencyPopover}
+            </div>
           )}
 
           {canAutoLayout && onPreviewAutoLayout && (

@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
+  ArrowUpDown,
+  Check,
   ChevronDown,
   ChevronUp,
   Compass,
@@ -10,15 +13,21 @@ import {
   Info,
   Lock,
   ShieldAlert,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import type {
   CompassDirection,
+  EdgeDistanceMode,
   LocationEdge,
   LocationNode,
   MechanicsTopicId,
 } from "../../types";
+import type {
+  EdgeConsistencyDiagnostic,
+  ReconciliationAdjustment,
+} from "./spatialConsistency";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import {
   LINK_SPEED_PRESET_GROUPS,
@@ -70,6 +79,8 @@ export interface MapLinkInspectorSectionProps {
   onDeleteEdge?: (edgeId: string) => void;
   canDeleteEdge?: (edgeId: string) => { allowed: boolean; reason?: string };
   onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
+  consistencyDiagnostic?: EdgeConsistencyDiagnostic | null;
+  reconciliationAdjustment?: ReconciliationAdjustment | null;
 }
 
 export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = ({
@@ -90,6 +101,8 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
   onDeleteEdge,
   canDeleteEdge,
   onOpenMechanicsHelp,
+  consistencyDiagnostic = null,
+  reconciliationAdjustment = null,
 }) => {
   const locationNodeMap = useMemo(
     () => new Map(allLocations.map((loc) => [loc.id, loc])),
@@ -610,6 +623,149 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Consistency Warning / Suggestion Banner */}
+      {consistencyDiagnostic && (
+        <div
+          className={`link-consistency-banner link-consistency-banner--${consistencyDiagnostic.severity}`}
+          role="status"
+          data-testid="link-consistency-banner"
+        >
+          <div className="link-consistency-banner-msg">
+            <AlertTriangle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>{consistencyDiagnostic.message}</span>
+          </div>
+          {!isMutatingLocked && (
+            <div className="link-consistency-banner-actions">
+              {(reconciliationAdjustment?.proposedMeters ??
+                consistencyDiagnostic.suggestedMeters) != null &&
+                consistencyDiagnostic.kind !== "compass_conflict" &&
+                consistencyDiagnostic.kind !== "overconstrained_locked" && (
+                  <button
+                    type="button"
+                    className="btn btn-cyan map-consistency-mini-btn"
+                    onClick={() => {
+                      const nextMeters =
+                        reconciliationAdjustment?.proposedMeters ??
+                        consistencyDiagnostic.suggestedMeters!;
+                      setDistanceDraft(String(nextMeters));
+                      onPatchEdgePair?.(primary.id, {
+                        distance_meters: nextMeters,
+                      });
+                    }}
+                  >
+                    <Check size={10} /> Apply{" "}
+                    {formatDistanceCompact(
+                      reconciliationAdjustment?.proposedMeters ??
+                        consistencyDiagnostic.suggestedMeters!
+                    )}
+                  </button>
+                )}
+              {(primary.distance_mode ?? "flexible") !== "non_euclidean" && (
+                <button
+                  type="button"
+                  className="btn map-consistency-mini-btn"
+                  title="Exempt this passage from 2D geometry checks (e.g. magic portal or folded space)"
+                  onClick={() =>
+                    onPatchEdgePair?.(primary.id, {
+                      distance_mode: "non_euclidean",
+                    })
+                  }
+                >
+                  <Sparkles size={10} /> Mark Non-Euclidean
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Distance Rule & Vertical Transition */}
+      <div className="link-inspector-card" data-testid="link-distance-rule-card">
+        <div className="link-inspector-label-row">
+          <span className="link-inspector-label">Distance Rule</span>
+          <span style={{ fontSize: "0.64rem", color: "var(--text-muted)" }}>
+            {(primary.distance_mode ?? "flexible") === "locked"
+              ? "Ground truth"
+              : (primary.distance_mode ?? "flexible") === "non_euclidean"
+              ? "Bypasses geometry"
+              : "Auto-adjustable"}
+          </span>
+        </div>
+        <div className="link-distance-mode-group" role="group" aria-label="Distance rule">
+          {(
+            [
+              {
+                id: "flexible" as EdgeDistanceMode,
+                label: "Flexible",
+                title: "Participates in consistency checks and adjusts during reconciliation",
+              },
+              {
+                id: "locked" as EdgeDistanceMode,
+                label: "Locked",
+                title: "Authoritative ground-truth distance; never auto-adjusted",
+              },
+              {
+                id: "non_euclidean" as EdgeDistanceMode,
+                label: "Non-Euclidean",
+                title: "Physics-bending portal or folded shortcut; exempt from 2D geometry checks",
+              },
+            ] as const
+          ).map((opt) => {
+            const activeMode = primary.distance_mode ?? "flexible";
+            const isActive = activeMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                aria-pressed={isActive}
+                title={opt.title}
+                disabled={isMutatingLocked}
+                className={`btn link-distance-mode-btn${
+                  isActive ? ` link-distance-mode-btn--${opt.id}` : ""
+                }`}
+                onClick={() =>
+                  onPatchEdgePair?.(primary.id, { distance_mode: opt.id })
+                }
+              >
+                {opt.id === "locked" && <Lock size={10} />}
+                {opt.id === "non_euclidean" && <Sparkles size={10} />}
+                <span>{opt.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <label
+          className={`link-toggle-row ${
+            isMutatingLocked || (primary.distance_mode ?? "flexible") === "non_euclidean"
+              ? "link-toggle-row--disabled"
+              : ""
+          }`}
+        >
+          <input
+            type="checkbox"
+            aria-label="Vertical transition"
+            className="link-toggle-checkbox"
+            checked={Boolean(primary.is_vertical)}
+            disabled={
+              isMutatingLocked ||
+              (primary.distance_mode ?? "flexible") === "non_euclidean"
+            }
+            onChange={(e) =>
+              onPatchEdgePair?.(primary.id, { is_vertical: e.target.checked })
+            }
+          />
+          <span>
+            <strong style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <ArrowUpDown size={11} /> Vertical Transition
+            </strong>
+            <div className="link-toggle-desc">
+              Hatch, ladder, or shaft: keeps travel meters/time while contributing 0m horizontal offset.
+            </div>
+          </span>
+        </label>
       </div>
 
       {/* Speed Modifier + Grouped Presets + Travel Mode */}

@@ -1,10 +1,16 @@
 import React, { useCallback, useMemo } from "react";
 import type {
   CompassDirection,
+  EdgeDistanceMode,
   LocationContainer,
   LocationEdge,
   LocationNode,
 } from "../../types";
+import {
+  computeReconciliationPlan,
+  isValidSpatialAnchor,
+  type ReconciliationAdjustment,
+} from "./spatialConsistency";
 import type {
   EmptyCanvasLinkState,
   GroupIntoContainerState,
@@ -50,10 +56,65 @@ export interface EdgePairPatch {
   obstacles?: string[];
   is_blocked?: boolean;
   is_secret?: boolean;
+  distance_mode?: EdgeDistanceMode;
+  is_vertical?: boolean;
   direction_label?: string;
   reciprocal_direction_label?: string;
   compass_direction?: CompassDirection;
   reciprocal_compass_direction?: CompassDirection;
+}
+
+/** Clear invalid or dangling `anchor_location_id` references after deletes or container moves. */
+export function sanitizeSnapshotAnchors(
+  containers: readonly LocationContainer[],
+  locations: readonly LocationNode[]
+): LocationNode[] {
+  let changed = false;
+  const next = locations.map((loc) => {
+    if (!loc.anchor_location_id) return loc;
+    const check = isValidSpatialAnchor(
+      loc,
+      loc.anchor_location_id,
+      containers,
+      locations
+    );
+    if (!check.valid) {
+      changed = true;
+      return { ...loc, anchor_location_id: null };
+    }
+    return loc;
+  });
+  return changed ? next : (locations as LocationNode[]);
+}
+
+/** Apply proposed flexible distance adjustments across primary and reciprocal edges. */
+export function applyAdjustmentsToEdges(
+  edges: readonly LocationEdge[],
+  adjustments: readonly ReconciliationAdjustment[]
+): { edges: LocationEdge[]; adjustedPairs: number } {
+  if (adjustments.length === 0) {
+    return { edges: edges as LocationEdge[], adjustedPairs: 0 };
+  }
+  const targetMetersByEdgeId = new Map<string, number>();
+  for (const adj of adjustments) {
+    targetMetersByEdgeId.set(adj.edgeId, adj.proposedMeters);
+    if (adj.reciprocalEdgeId) {
+      targetMetersByEdgeId.set(adj.reciprocalEdgeId, adj.proposedMeters);
+    }
+  }
+  let anyChanged = false;
+  const nextEdges = edges.map((e) => {
+    const nextMeters = targetMetersByEdgeId.get(e.id);
+    if (nextMeters !== undefined && nextMeters !== e.distance_meters) {
+      anyChanged = true;
+      return { ...e, distance_meters: nextMeters };
+    }
+    return e;
+  });
+  return {
+    edges: anyChanged ? nextEdges : (edges as LocationEdge[]),
+    adjustedPairs: anyChanged ? adjustments.length : 0,
+  };
 }
 
 /**
@@ -261,6 +322,9 @@ export interface UseTopologyMutationsParams {
   setPromotionPrompt: React.Dispatch<
     React.SetStateAction<PromotionPromptState | null>
   >;
+  autoSyncConsistency?: boolean;
+  unlockLore?: boolean;
+  revealedEdgeIds?: readonly string[];
 }
 
 export function useTopologyMutations({
@@ -295,7 +359,66 @@ export function useTopologyMutations({
   setStandaloneContainerModal,
   onEdgesRemoved,
   setPromotionPrompt,
+  autoSyncConsistency = false,
+  unlockLore = false,
+  revealedEdgeIds = [],
 }: UseTopologyMutationsParams) {
+  const commitGraphWithConsistencyAutoSync = useCallback(
+    (
+      next: GraphSnapshot,
+      pushUndo = true,
+      changedEdgeIds: readonly string[] = []
+    ) => {
+      const cleanedLocs = sanitizeSnapshotAnchors(next.containers, next.locations);
+      const sanitized: GraphSnapshot =
+        cleanedLocs === next.locations ? next : { ...next, locations: cleanedLocs };
+
+      if (!autoSyncConsistency) {
+        commitNextGraph(sanitized, pushUndo);
+        return 0;
+      }
+      const plan = computeReconciliationPlan({
+        scopeContainerId: currentContainerId,
+        containers: sanitized.containers,
+        locations: sanitized.locations,
+        edges: sanitized.edges,
+        options: {
+          mode,
+          unlockLore,
+          revealedEdgeIds,
+          changedEdgeIds,
+        },
+      });
+      if (plan.length === 0) {
+        commitNextGraph(sanitized, pushUndo);
+        return 0;
+      }
+      const { edges: syncedEdges, adjustedPairs } = applyAdjustmentsToEdges(
+        sanitized.edges,
+        plan
+      );
+      commitNextGraph(
+        adjustedPairs > 0 ? { ...sanitized, edges: syncedEdges } : sanitized,
+        pushUndo
+      );
+      if (adjustedPairs > 0) {
+        setStatusNotice(
+          `Auto-synced ${adjustedPairs} unlocked link${adjustedPairs === 1 ? "" : "s"} — Undo to revert.`
+        );
+      }
+      return adjustedPairs;
+    },
+    [
+      autoSyncConsistency,
+      commitNextGraph,
+      currentContainerId,
+      mode,
+      unlockLore,
+      revealedEdgeIds,
+      setStatusNotice,
+    ]
+  );
+
   const patchLocation = useCallback(
     (locId: string, patch: Partial<LocationNode>, pushUndo = false) => {
       const oldLoc = locationMap.get(locId);
@@ -311,6 +434,21 @@ export function useTopologyMutations({
               patch.name
             )
           : workingEdges;
+      const anchorChanged = Object.prototype.hasOwnProperty.call(
+        patch,
+        "anchor_location_id"
+      );
+      if (anchorChanged) {
+        commitGraphWithConsistencyAutoSync(
+          {
+            containers: workingContainers,
+            locations: nextLocs,
+            edges: nextEdges,
+          },
+          true
+        );
+        return;
+      }
       commitNextGraph(
         {
           containers: workingContainers,
@@ -320,7 +458,14 @@ export function useTopologyMutations({
         pushUndo
       );
     },
-    [locationMap, workingLocations, workingContainers, workingEdges, commitNextGraph]
+    [
+      locationMap,
+      workingLocations,
+      workingContainers,
+      workingEdges,
+      commitNextGraph,
+      commitGraphWithConsistencyAutoSync,
+    ]
   );
 
   const patchContainer = useCallback(
@@ -1281,12 +1426,15 @@ export function useTopologyMutations({
         }),
       };
 
-      const nextLocs = workingLocations.map((l) => {
-        if (l.id === draggedLoc.id || l.id === targetLoc.id) {
-          return { ...l, container_id: contId, ui_x: null, ui_y: null };
-        }
-        return l;
-      });
+      const nextLocs = sanitizeSnapshotAnchors(
+        [...workingContainers, newCont],
+        workingLocations.map((l) => {
+          if (l.id === draggedLoc.id || l.id === targetLoc.id) {
+            return { ...l, container_id: contId, ui_x: null, ui_y: null };
+          }
+          return l;
+        })
+      );
       commitNextGraph({
         containers: [...workingContainers, newCont],
         locations: nextLocs,
@@ -1316,16 +1464,19 @@ export function useTopologyMutations({
       targetContainerId: string | null
     ) => {
       if (draggedKind === "location") {
-        const nextLocs = workingLocations.map((l) =>
-          l.id === draggedId
-            ? {
-                ...l,
-                container_id: targetContainerId,
-                is_entry_exit: targetContainerId ? l.is_entry_exit : false,
-                ui_x: null,
-                ui_y: null,
-              }
-            : l
+        const nextLocs = sanitizeSnapshotAnchors(
+          workingContainers,
+          workingLocations.map((l) =>
+            l.id === draggedId
+              ? {
+                  ...l,
+                  container_id: targetContainerId,
+                  is_entry_exit: targetContainerId ? l.is_entry_exit : false,
+                  ui_x: null,
+                  ui_y: null,
+                }
+              : l
+          )
         );
         commitNextGraph({
           containers: workingContainers,
@@ -1338,9 +1489,10 @@ export function useTopologyMutations({
             ? { ...c, parent_container_id: targetContainerId, ui_x: null, ui_y: null }
             : c
         );
+        const nextLocs = sanitizeSnapshotAnchors(nextConts, workingLocations);
         commitNextGraph({
           containers: nextConts,
-          locations: workingLocations,
+          locations: nextLocs,
           edges: workingEdges,
         });
       }
@@ -1478,7 +1630,10 @@ export function useTopologyMutations({
         setStatusNotice(check.reason || "Cannot delete this location.");
         return;
       }
-      const nextLocs = workingLocations.filter((l) => l.id !== locId);
+      const nextLocs = sanitizeSnapshotAnchors(
+        workingContainers,
+        workingLocations.filter((l) => l.id !== locId)
+      );
       const nextEdges = workingEdges.filter(
         (e) => e.from_location_id !== locId && e.to_location_id !== locId
       );
@@ -1515,16 +1670,19 @@ export function useTopologyMutations({
             ? { ...c, parent_container_id: nextParent, ui_x: null, ui_y: null }
             : c
         );
-      const nextLocs = workingLocations.map((l) =>
-        l.container_id === contId
-          ? {
-              ...l,
-              container_id: nextParent,
-              is_entry_exit: nextParent ? l.is_entry_exit : false,
-              ui_x: null,
-              ui_y: null,
-            }
-          : l
+      const nextLocs = sanitizeSnapshotAnchors(
+        nextConts,
+        workingLocations.map((l) =>
+          l.container_id === contId
+            ? {
+                ...l,
+                container_id: nextParent,
+                is_entry_exit: nextParent ? l.is_entry_exit : false,
+                ui_x: null,
+                ui_y: null,
+              }
+            : l
+        )
       );
       if (selectedContainerId === contId) setSelectedContainerId(null);
       commitNextGraph({
@@ -1726,6 +1884,20 @@ export function useTopologyMutations({
           updated.is_secret = patch.is_secret;
           itemChanged = true;
         }
+        if (
+          patch.distance_mode !== undefined &&
+          (updated.distance_mode ?? "flexible") !== patch.distance_mode
+        ) {
+          updated.distance_mode = patch.distance_mode;
+          itemChanged = true;
+        }
+        if (
+          patch.is_vertical !== undefined &&
+          Boolean(updated.is_vertical) !== Boolean(patch.is_vertical)
+        ) {
+          updated.is_vertical = Boolean(patch.is_vertical);
+          itemChanged = true;
+        }
         if (isPrimary && nextPrimaryLabel && updated.direction_label !== nextPrimaryLabel) {
           updated.direction_label = nextPrimaryLabel;
           itemChanged = true;
@@ -1783,11 +1955,29 @@ export function useTopologyMutations({
       });
 
       if (!changed) return;
-      commitNextGraph({
-        containers: workingContainers,
-        locations: workingLocations,
-        edges: nextEdges,
-      });
+      const affectsConsistency =
+        patch.distance_meters !== undefined ||
+        patch.distance_mode !== undefined ||
+        patch.is_vertical !== undefined ||
+        patch.compass_direction !== undefined ||
+        patch.reciprocal_compass_direction !== undefined;
+      if (affectsConsistency) {
+        commitGraphWithConsistencyAutoSync(
+          {
+            containers: workingContainers,
+            locations: workingLocations,
+            edges: nextEdges,
+          },
+          true,
+          [edgeId]
+        );
+      } else {
+        commitNextGraph({
+          containers: workingContainers,
+          locations: workingLocations,
+          edges: nextEdges,
+        });
+      }
     },
     [
       isMutatingLocked,
@@ -1795,6 +1985,7 @@ export function useTopologyMutations({
       workingContainers,
       workingLocations,
       commitNextGraph,
+      commitGraphWithConsistencyAutoSync,
       setStatusNotice,
     ]
   );
@@ -1841,12 +2032,44 @@ export function useTopologyMutations({
         }
         return false;
       }
+      commitGraphWithConsistencyAutoSync(
+        {
+          containers: workingContainers,
+          locations: workingLocations,
+          edges: result.edges,
+        },
+        true,
+        [edgeId]
+      );
+      return true;
+    },
+    [
+      isMutatingLocked,
+      workingEdges,
+      workingContainers,
+      workingLocations,
+      commitGraphWithConsistencyAutoSync,
+      setStatusNotice,
+    ]
+  );
+
+  const applyReconciliationAdjustments = useCallback(
+    (adjustments: readonly ReconciliationAdjustment[]) => {
+      if (isMutatingLocked || adjustments.length === 0) return 0;
+      const { edges: nextEdges, adjustedPairs } = applyAdjustmentsToEdges(
+        workingEdges,
+        adjustments
+      );
+      if (adjustedPairs === 0) return 0;
       commitNextGraph({
         containers: workingContainers,
         locations: workingLocations,
-        edges: result.edges,
+        edges: nextEdges,
       });
-      return true;
+      setStatusNotice(
+        `Reconciled ${adjustedPairs} link distance${adjustedPairs === 1 ? "" : "s"} — Undo to revert.`
+      );
+      return adjustedPairs;
     },
     [
       isMutatingLocked,
@@ -1940,5 +2163,6 @@ export function useTopologyMutations({
     handleToggleEdgeSecret,
     handleDeleteEdge,
     handleDeleteEdgeGroup,
+    applyReconciliationAdjustments,
   };
 }

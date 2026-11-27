@@ -18,6 +18,8 @@ from app.schemas.world import (
     WorldRecord,
     WorldUpdatePayload,
     normalize_compass_direction,
+    normalize_edge_distance_mode,
+    normalize_edge_is_vertical,
     normalize_edge_obstacles,
     normalize_edge_speed_modifier,
     normalize_edge_travel_mode,
@@ -45,6 +47,8 @@ class WorldLocationsMixin:
         obstacles: list[str] | None = None,
         is_blocked: bool = False,
         is_secret: bool = False,
+        distance_mode: str = "flexible",
+        is_vertical: bool = False,
     ) -> None:
         conn.execute(
             """
@@ -52,9 +56,9 @@ class WorldLocationsMixin:
                 id, world_id, from_location_id, to_location_id,
                 direction_label, compass_direction, distance_meters,
                 speed_modifier, travel_mode, obstacles_json,
-                is_blocked, is_secret, created_at_turn_id
+                is_blocked, is_secret, distance_mode, is_vertical, created_at_turn_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 edge_id,
@@ -69,6 +73,8 @@ class WorldLocationsMixin:
                 json.dumps(normalize_edge_obstacles(obstacles or [])),
                 1 if is_blocked else 0,
                 1 if is_secret else 0,
+                normalize_edge_distance_mode(distance_mode),
+                1 if normalize_edge_is_vertical(is_vertical) else 0,
                 created_at_turn_id,
             ),
         )
@@ -361,6 +367,12 @@ class WorldLocationsMixin:
                         obstacles=normalize_edge_obstacles(raw_obs),
                         is_blocked=bool(r["is_blocked"]) if "is_blocked" in keys else False,
                         is_secret=bool(r["is_secret"]) if "is_secret" in keys else False,
+                        distance_mode=normalize_edge_distance_mode(
+                            r["distance_mode"] if "distance_mode" in keys else "flexible"
+                        ),
+                        is_vertical=normalize_edge_is_vertical(
+                            r["is_vertical"] if "is_vertical" in keys else False
+                        ),
                         destination=dest,
                     )
                 )
@@ -649,6 +661,8 @@ class WorldLocationsMixin:
                     obstacles=old_nb.obstacles,
                     is_blocked=old_nb.is_blocked,
                     is_secret=old_nb.is_secret,
+                    distance_mode=old_nb.distance_mode,
+                    is_vertical=old_nb.is_vertical,
                     created_at_turn_id=created_at_turn_id,
                 )
                 self._insert_edge_row(
@@ -665,6 +679,8 @@ class WorldLocationsMixin:
                     obstacles=old_nb.obstacles,
                     is_blocked=old_nb.is_blocked,
                     is_secret=old_nb.is_secret,
+                    distance_mode=old_nb.distance_mode,
+                    is_vertical=old_nb.is_vertical,
                     created_at_turn_id=created_at_turn_id,
                 )
 

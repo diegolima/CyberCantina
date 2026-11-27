@@ -1182,15 +1182,30 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "obstacle",
       "secret passage",
       "secret link",
+      "distance rule",
+      "flexible",
+      "locked",
+      "non-euclidean",
+      "vertical",
+      "spatial anchor",
+      "consistency",
+      "reconcile",
     ],
     inOneLine:
-      "Every map connection carries a metric distance, speed modifier, optional travel mode, obstacles/blocked flags, and optional Secret gating that hides unfound paths.",
+      "Every map connection carries a metric distance, Distance Rule (Flexible, Locked, or Non-Euclidean), optional Vertical transition flag, speed modifier, obstacles/blocked flags, and optional Secret gating.",
     scales: [
       {
         label: "Metric Distance & Base Pace",
         rangeOrTag: `m / km · ${WALKING_METERS_PER_MINUTE}m/min`,
         meaning:
           "Default walking pace (~4.2 km/h) sets a deterministic travel duration floor on the World Clock when crossing a link.",
+        accent: "cyan",
+      },
+      {
+        label: "Distance Rules & Vertical",
+        rangeOrTag: "Flexible / Locked / Non-Euclidean",
+        meaning:
+          "Flexible links adjust during consistency reconciliation; Locked links act as fixed ground truth; Non-Euclidean links (magic portals, folded space) bypass 2D geometry checks; Vertical links add 0m horizontal offset while keeping travel meters/time.",
         accent: "cyan",
       },
       {
@@ -1217,6 +1232,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     ],
     howItChanges: [
       "Shift+Click any map distance badge to toggle an instant speed-adjusted duration preview; double-click a link badge (when editing is unlocked) to edit metric distance inline.",
+      "Containerized Level 0 locations can pin an External Spatial Anchor so upper/outer container distances constrain underground/interior links; open Consistency in the map toolbar to inspect diagnostics, Preview Reconciliation, or enable Auto-Sync Unlocked Links.",
       "In play, succeeding on a discovery roll or searching when dice are Disabled reveals both directions of a Secret Link on the active timeline branch.",
     ],
     effectOnPlay: [
@@ -1225,7 +1241,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     ],
     underTheHood: {
       summary:
-        "Traversal duration floor formula: `distance_meters / (WALKING_METERS_PER_MINUTE * speed_modifier)` minutes (minimum 1m when nonzero).",
+        "Traversal duration floor formula: `distance_meters / (WALKING_METERS_PER_MINUTE * speed_modifier)` minutes (minimum 1m when nonzero). Authoring consistency uses a 2D compass-vector solver (Schur-complement weighted reconciliation) purely at edit time.",
       items: [
         {
           label: "Base Walking Speed",

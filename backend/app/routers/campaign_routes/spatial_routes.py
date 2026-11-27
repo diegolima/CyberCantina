@@ -80,6 +80,8 @@ def connect_campaign_locations(
             obstacles=req.obstacles,
             is_blocked=req.is_blocked,
             is_secret=req.is_secret,
+            distance_mode=req.distance_mode,
+            is_vertical=req.is_vertical,
             owner_id=current_user.id,
         )
     except PermissionError as exc:
@@ -109,6 +111,8 @@ def update_campaign_edge_distance(
             obstacles=req.obstacles,
             is_blocked=req.is_blocked,
             is_secret=req.is_secret,
+            distance_mode=req.distance_mode,
+            is_vertical=req.is_vertical,
             direction_label=req.direction_label,
             reciprocal_direction_label=req.reciprocal_direction_label,
             update_reciprocal=req.update_reciprocal,

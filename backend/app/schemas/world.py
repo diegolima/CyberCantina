@@ -174,6 +174,32 @@ def normalize_edge_obstacles(raw: Any) -> list[str]:
     return cleaned
 
 
+EdgeDistanceMode = Literal["flexible", "locked", "non_euclidean"]
+VALID_EDGE_DISTANCE_MODES: frozenset[str] = frozenset(
+    {"flexible", "locked", "non_euclidean"}
+)
+
+
+def normalize_edge_distance_mode(raw: Any) -> EdgeDistanceMode:
+    """Normalize an edge distance rule into `flexible`, `locked`, or `non_euclidean`."""
+    if isinstance(raw, str):
+        cleaned = raw.strip().lower()
+        if cleaned in VALID_EDGE_DISTANCE_MODES:
+            return cleaned  # type: ignore[return-value]
+    return "flexible"
+
+
+def normalize_edge_is_vertical(raw: Any) -> bool:
+    """Normalize an edge vertical-transition flag into a strict boolean."""
+    if raw is None or isinstance(raw, bool):
+        return bool(raw)
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes"}
+    return False
+
+
 def resolve_legacy_edge_flags(data: Any) -> Any:
     """Normalize first-class link properties and map legacy `is_locked_or_hidden` -> `is_blocked`."""
     if not isinstance(data, dict):
@@ -210,6 +236,8 @@ def resolve_legacy_edge_flags(data: Any) -> Any:
         out["is_secret"] = False
     else:
         out["is_secret"] = bool(out["is_secret"])
+    out["distance_mode"] = normalize_edge_distance_mode(out.get("distance_mode"))
+    out["is_vertical"] = normalize_edge_is_vertical(out.get("is_vertical"))
     return out
 
 
@@ -224,6 +252,17 @@ def extract_edge_link_fields(
         normalize_edge_obstacles(normalized.get("obstacles")),
         bool(normalized.get("is_blocked", False)),
         bool(normalized.get("is_secret", False)),
+    )
+
+
+def extract_edge_consistency_fields(
+    edge: dict[str, Any],
+) -> tuple[EdgeDistanceMode, bool]:
+    """Extract normalized `(distance_mode, is_vertical)` from raw dicts."""
+    normalized = resolve_legacy_edge_flags(edge)
+    return (
+        normalize_edge_distance_mode(normalized.get("distance_mode")),
+        normalize_edge_is_vertical(normalized.get("is_vertical")),
     )
 
 
@@ -875,6 +914,14 @@ class LocationEdgeDraft(BaseModel):
         default=False,
         description="Whether this link is hidden from players until discovered via search/roll or GM reveal.",
     )
+    distance_mode: EdgeDistanceMode = Field(
+        default="flexible",
+        description="Consistency constraint rule: 'flexible', 'locked', or 'non_euclidean' (magic portals/folded space).",
+    )
+    is_vertical: bool = Field(
+        default=False,
+        description="Whether this passage is a vertical transition (hatch, ladder, shaft, elevator) contributing 0 horizontal displacement.",
+    )
     bidirectional: bool = Field(default=True)
 
     @model_validator(mode="before")
@@ -1024,6 +1071,7 @@ class LocationNodeCommitDraft(LocationNodeDraft):
     ui_x: float | None = None
     ui_y: float | None = None
     icon: str | None = None
+    anchor_location_id: str | None = None
 
     @model_validator(mode="after")
     def _normalize_root_portal(self) -> "LocationNodeCommitDraft":
@@ -1322,6 +1370,7 @@ class LocationNode(BaseModel):
     ui_x: float | None = None
     ui_y: float | None = None
     icon: str | None = None
+    anchor_location_id: str | None = None
     image_media_id: str | None = None
     image_url: str | None = None
     image_label: str | None = None
@@ -1383,6 +1432,8 @@ class LocationEdge(BaseModel):
     obstacles: list[str] = Field(default_factory=list)
     is_blocked: bool = False
     is_secret: bool = False
+    distance_mode: EdgeDistanceMode = "flexible"
+    is_vertical: bool = False
     created_at_turn_id: str | None = None
     superseded_at_turn_id: str | None = None
 
@@ -1414,6 +1465,8 @@ class NeighborLocationView(BaseModel):
     obstacles: list[str] = Field(default_factory=list)
     is_blocked: bool = False
     is_secret: bool = False
+    distance_mode: EdgeDistanceMode = "flexible"
+    is_vertical: bool = False
     destination: LocationNode
 
     @model_validator(mode="before")
@@ -1480,6 +1533,58 @@ def validate_container_hierarchy_integrity(
                 raise ValueError(f"Cycle detected in container hierarchy involving '{curr.name}'.")
             visited.add(curr.id)
             curr = c_by_id[curr.parent_container_id]
+
+
+def sanitize_location_anchors(
+    containers: Sequence[LocationContainer | LocationContainerDraft],
+    locations: Sequence[LocationNode | LocationNodeCommitDraft],
+) -> None:
+    """Clear invalid, self-referential, root-level, or intra-container `anchor_location_id` fields in place."""
+    children_by_parent: dict[str | None, list[str]] = {}
+    for c in containers:
+        children_by_parent.setdefault(c.parent_container_id, []).append(c.id)
+
+    descendant_cache: dict[str, set[str]] = {}
+
+    def _subtree_ids(root_id: str) -> set[str]:
+        if root_id in descendant_cache:
+            return descendant_cache[root_id]
+        result: set[str] = {root_id}
+        stack = [root_id]
+        while stack:
+            curr = stack.pop()
+            for child_id in children_by_parent.get(curr, ()):
+                if child_id not in result:
+                    result.add(child_id)
+                    stack.append(child_id)
+        descendant_cache[root_id] = result
+        return result
+
+    loc_by_id = {
+        getattr(loc, "id", None) or getattr(loc, "key", None): loc
+        for loc in locations
+        if (getattr(loc, "id", None) or getattr(loc, "key", None))
+    }
+
+    for loc in locations:
+        anchor_id = getattr(loc, "anchor_location_id", None)
+        if isinstance(anchor_id, str):
+            anchor_id = anchor_id.strip() or None
+        else:
+            anchor_id = None
+        if not anchor_id or not loc.container_id:
+            loc.anchor_location_id = None
+            continue
+        loc_key = getattr(loc, "id", None) or getattr(loc, "key", None)
+        target = loc_by_id.get(anchor_id)
+        if target is None or anchor_id == loc_key:
+            loc.anchor_location_id = None
+            continue
+        own_subtree = _subtree_ids(loc.container_id)
+        if target.container_id and target.container_id in own_subtree:
+            loc.anchor_location_id = None
+            continue
+        loc.anchor_location_id = anchor_id
 
 
 def validate_world_reachability(
@@ -1644,6 +1749,7 @@ CANONICAL_LOCATION_KEYS: frozenset[str] = frozenset(
         "ui_x",
         "ui_y",
         "icon",
+        "anchor_location_id",
         "image_media_id",
         "image_url",
         "image_label",
@@ -1680,6 +1786,8 @@ CANONICAL_EDGE_KEYS: frozenset[str] = frozenset(
         "obstacles",
         "is_blocked",
         "is_secret",
+        "distance_mode",
+        "is_vertical",
         "is_locked_or_hidden",  # Legacy v0.36.x key auto-converted to is_blocked without spurious warnings
         "created_at_turn_id",
         "superseded_at_turn_id",

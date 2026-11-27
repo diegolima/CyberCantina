@@ -22,6 +22,8 @@ export interface LocationProp {
 
 export type CompassDirection = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 
+export type EdgeDistanceMode = "flexible" | "locked" | "non_euclidean";
+
 export type SharedLoreCategory = "history" | "culture" | "faction" | "rumor";
 export type WorldLoreCategory = SharedLoreCategory | "figure" | "threat" | "artifact";
 export type LocationLoreCategory = SharedLoreCategory | "secret";
@@ -130,6 +132,7 @@ export interface LocationNode {
   ui_x?: number | null;
   ui_y?: number | null;
   icon?: string | null;
+  anchor_location_id?: string | null;
   image_media_id?: string | null;
   image_url?: string | null;
   image_label?: string | null;
@@ -153,6 +156,8 @@ export interface LocationEdge {
   obstacles: string[];
   is_blocked: boolean;
   is_secret: boolean;
+  distance_mode?: EdgeDistanceMode;
+  is_vertical?: boolean;
   created_at_turn_id?: string | null;
   superseded_at_turn_id?: string | null;
 }
@@ -167,6 +172,8 @@ export interface NeighborLocationView {
   obstacles: string[];
   is_blocked: boolean;
   is_secret: boolean;
+  distance_mode?: EdgeDistanceMode;
+  is_vertical?: boolean;
   destination: LocationNode;
 }
 
@@ -212,6 +219,7 @@ export interface LocationNodeDraft {
   ui_x?: number | null;
   ui_y?: number | null;
   icon?: string | null;
+  anchor_location_id?: string | null;
   lore_nodes?: LocationLoreNodeDraft[];
   props?: LocationProp[];
 }
@@ -228,6 +236,8 @@ export interface LocationEdgeDraft {
   obstacles?: string[];
   is_blocked: boolean;
   is_secret: boolean;
+  distance_mode?: EdgeDistanceMode;
+  is_vertical?: boolean;
   bidirectional: boolean;
 }
 

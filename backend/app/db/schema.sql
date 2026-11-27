@@ -167,7 +167,8 @@ CREATE TABLE IF NOT EXISTS location_nodes (
     ui_x REAL NULL,
     ui_y REAL NULL,
     icon TEXT NULL,
-    image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL
+    image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL,
+    anchor_location_id TEXT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_location_nodes_world ON location_nodes(world_id);
@@ -202,6 +203,8 @@ CREATE TABLE IF NOT EXISTS location_edges (
     obstacles_json TEXT NOT NULL DEFAULT '[]',
     is_blocked INTEGER NOT NULL DEFAULT 0,
     is_secret INTEGER NOT NULL DEFAULT 0,
+    distance_mode TEXT NOT NULL DEFAULT 'flexible' CHECK(distance_mode IN ('flexible', 'locked', 'non_euclidean')),
+    is_vertical INTEGER NOT NULL DEFAULT 0 CHECK(is_vertical IN (0, 1)),
     created_at_turn_id TEXT NULL,
     superseded_at_turn_id TEXT NULL
 );
