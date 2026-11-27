@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHistoryNavState,
   computeOverlayReconcileAction,
+  createNavSessionId,
   formatAppRoute,
   isStaleForwardOverlayState,
   parseAppRoute,
@@ -9,6 +10,10 @@ import {
   routesEqual,
   sortOverlayStack,
 } from "../navigationHistory";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("navigationHistory utilities", () => {
   it("parses and formats Home and Campaign routes accurately", () => {
@@ -138,5 +143,31 @@ describe("navigationHistory utilities", () => {
     expect(isStaleForwardOverlayState(current, "sess_b", 1, 1)).toBe(true);
     // Legitimate pop from depth 2 -> depth 1 while 2 overlays were mounted
     expect(isStaleForwardOverlayState(current, "sess_a", 2, 2)).toBe(false);
+  });
+
+  it("generates navigation session IDs across randomUUID, getRandomValues, and counter fallbacks", () => {
+    vi.stubGlobal("crypto", {
+      randomUUID: () => "11111111-2222-4333-8444-555555555555",
+    });
+    expect(createNavSessionId()).toBe("11111111-2222-4333-8444-555555555555");
+
+    // Simulate plain HTTP LAN origin where randomUUID is unavailable but getRandomValues exists
+    vi.stubGlobal("crypto", {
+      getRandomValues: (arr: Uint8Array) => {
+        for (let i = 0; i < arr.length; i += 1) {
+          arr[i] = i + 1;
+        }
+        return arr;
+      },
+    });
+    expect(createNavSessionId()).toBe("ccnav_0102030405060708090a0b0c0d0e0f10");
+
+    // Simulate environment with no Web Crypto at all
+    vi.stubGlobal("crypto", undefined);
+    const idA = createNavSessionId();
+    const idB = createNavSessionId();
+    expect(idA).toMatch(/^ccnav_[0-9a-z]+_[0-9a-z]+$/);
+    expect(idB).toMatch(/^ccnav_[0-9a-z]+_[0-9a-z]+$/);
+    expect(idA).not.toBe(idB);
   });
 });

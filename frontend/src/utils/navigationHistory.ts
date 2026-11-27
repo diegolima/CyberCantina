@@ -44,11 +44,20 @@ export function routesEqual(a: AppRoute, b: AppRoute): boolean {
   return b.kind === "campaign" && a.campaignId === b.campaignId;
 }
 
+let navSessionSeq = 0;
+
 export function createNavSessionId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
-  return `ccnav_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return `ccnav_${hex}`;
+  }
+  navSessionSeq += 1;
+  return `ccnav_${Date.now().toString(36)}_${navSessionSeq.toString(36)}`;
 }
 
 export function buildHistoryNavState(

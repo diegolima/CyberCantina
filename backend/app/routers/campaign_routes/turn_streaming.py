@@ -87,13 +87,28 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from typing import Any
-from app.routers.campaign_routes.schemas_and_gate import _resolve_facade_attr
-
 from app.routers.campaign_routes.schemas_and_gate import (
+    _resolve_facade_attr,
     campaign_turn_gate,
     logger,
     router,
 )
+
+_SEARCH_SLASH_COMMANDS = ("/search", "/investigate", "/inspect")
+
+
+def _parse_search_slash_command(message: str) -> tuple[bool, str | None]:
+    """Parse `/search [focus]` (and `/investigate`, `/inspect`) in guaranteed O(n) time."""
+    if not message or "\n" in message or "\r" in message:
+        return False, None
+    lower = message.lower()
+    for cmd in _SEARCH_SLASH_COMMANDS:
+        if lower == cmd:
+            return True, None
+        if lower.startswith(cmd) and message[len(cmd)].isspace():
+            focus = message[len(cmd) :].strip()
+            return True, (focus[:240] if focus else None)
+    return False, None
 
 # ------------------------------------------------------------------
 # 4-Phase Turn Execution Pipeline (SSE Stream & Sync REST)
@@ -342,13 +357,11 @@ async def _execute_turn_stream_events_unlocked(
         if (req.search_focus and req.search_focus.strip())
         else None
     )
-    _search_slash_re = re.compile(r"^/(?:search|investigate|inspect)(?:\s+(.*))?$", re.IGNORECASE)
-    if not is_search_action and req.narrative_mode == "standard" and effective_user_message:
-        search_m = _search_slash_re.match(effective_user_message)
-        if search_m:
-            is_search_action = True
-            if not search_focus and search_m.group(1) and search_m.group(1).strip():
-                search_focus = search_m.group(1).strip()[:240]
+    is_search_slash, parsed_search_focus = _parse_search_slash_command(effective_user_message)
+    if not is_search_action and req.narrative_mode == "standard" and is_search_slash:
+        is_search_action = True
+        if not search_focus and parsed_search_focus:
+            search_focus = parsed_search_focus
 
     applied_choices = dict(req.character_choices)
 
@@ -492,7 +505,9 @@ async def _execute_turn_stream_events_unlocked(
         message_is_synthetic = True
         is_solo = False
 
-    if is_search_action and (not effective_user_message or _search_slash_re.match(effective_user_message)):
+    if is_search_action and (
+        not effective_user_message or _parse_search_slash_command(effective_user_message)[0]
+    ):
         effective_user_message = (
             f"I carefully search around {search_focus}."
             if search_focus

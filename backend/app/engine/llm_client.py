@@ -47,6 +47,7 @@ from app.schemas.llm_tools import (
 )
 from app.schemas.provider import ProviderColor
 from app.schemas.telemetry import LlmCallTelemetry
+from app.security.log_sanitize import sanitize_log_value
 from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
 
 logger = logging.getLogger("cybercantina.llm")
@@ -988,7 +989,12 @@ class LLMClient:
                 client, target.root_url, headers, active_profile.model, resp.status_code, resp.text
             )
             if fallback:
-                logger.warning("%s model '%s' offline; attempting fallback to '%s'", adapter.display_name, active_profile.model, fallback)
+                logger.warning(
+                    "%s model '%s' offline; attempting fallback to '%s'",
+                    adapter.display_name,
+                    sanitize_log_value(active_profile.model),
+                    sanitize_log_value(fallback),
+                )
                 fallback_payload = dict(active_payload)
                 fallback_payload["model"] = fallback
                 fallback_resp = await client.post(v1_url, headers=headers, json=fallback_payload, timeout=active_profile.timeout_seconds)
@@ -1586,6 +1592,7 @@ class LLMClient:
 
         async with adapter.request_semaphore(headers):
             active_payload = dict(oai_payload)
+            current_model = str(active_profile.model)
             if target.provider_type != "aihorde":
                 active_payload["stream_options"] = {"include_usage": True}
             bad_request_attempt = 0
@@ -1618,17 +1625,18 @@ class LLMClient:
                                 client,
                                 target.root_url,
                                 headers,
-                                str(active_payload["model"]),
+                                current_model,
                                 resp.status_code,
                                 err_text,
                             )
-                            if fallback and fallback != active_payload["model"]:
+                            if fallback and fallback != current_model:
                                 logger.warning(
                                     "%s streaming model '%s' offline; attempting fallback to '%s'",
                                     adapter.display_name,
-                                    active_payload["model"],
-                                    fallback,
+                                    sanitize_log_value(current_model),
+                                    sanitize_log_value(fallback),
                                 )
+                                current_model = fallback
                                 active_payload["model"] = fallback
                                 continue
                             if fatal_err:
@@ -1683,7 +1691,7 @@ class LLMClient:
                                 provider_id=target.provider_id,
                                 provider_name=target.provider_name,
                                 provider_color=target.provider_color,
-                                model_override=str(active_payload.get("model") or active_profile.model),
+                                model_override=current_model,
                                 prompt_tokens=oai_prompt_tok,
                                 completion_tokens=oai_comp_tok,
                                 finish_reason=oai_finish_reason,
