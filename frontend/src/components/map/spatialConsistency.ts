@@ -11,6 +11,7 @@ import {
   OPPOSITE_COMPASS,
   buildContainerBreadcrumb,
   canonicalEdgePairKey,
+  formatDistanceCompact,
   inferCompassDirection,
   isEdgeRevealed,
   resolveRevealedEdgePairs,
@@ -37,6 +38,26 @@ const LAMBDA_LOCK = 1e8;
 const TIKHONOV_EPS = 1e-8;
 const MAX_ACTIVE_SET_ITERS = 8;
 const MAX_RECURSIVE_DEPTH = 12;
+const MAX_COMPASS_SECTOR_DEG = 25; // 8-way compass sector half-width is 22.5° (+2.5° grace)
+const MIN_COMPASS_COS = Math.cos((MAX_COMPASS_SECTOR_DEG * Math.PI) / 180);
+
+export function vectorToCompass(dx: number, dy: number): CompassDirection {
+  const angle = Math.atan2(dy, dx);
+  const octant = ((Math.round((angle * 8) / (2 * Math.PI)) % 8) + 8) % 8;
+  const order: CompassDirection[] = ["E", "NE", "N", "NW", "W", "SW", "S", "SE"];
+  return order[octant] ?? "E";
+}
+
+/**
+ * Format suggested distances for interactive Apply/Use buttons cleanly
+ * (`1500` -> `1.5km`, while non-tenth-km values like `1118` stay `1118m`).
+ */
+export function formatSuggestedDistanceLabel(meters: number): string {
+  const safe = Math.max(1, Math.round(meters));
+  if (safe < 1000) return `${safe}m`;
+  if (safe < 10_000 && safe % 100 !== 0) return `${safe}m`;
+  return formatDistanceCompact(safe);
+}
 
 export type ConsistencyIssueKind =
   | "distance_mismatch"
@@ -251,7 +272,9 @@ interface ReducedPair {
   distanceMeters: number;
   distanceMode: EdgeDistanceMode;
   isVertical: boolean;
+  dirUV: CompassDirection;
   unitVectorUV: { x: number; y: number };
+  minEdgeIndex: number;
   asymmetricReason: string | null;
 }
 
@@ -465,6 +488,9 @@ function buildReducedPairsForScope(params: {
   }
 
   // Group edges by unordered mapped endpoint pair (for collapsed L1 containers, keep per physical raw pair unless collapsed)
+  const edgeIndexById = new Map<string, number>();
+  visibleEdges.forEach((e, idx) => edgeIndexById.set(e.id, idx));
+
   const pairGroups = new Map<string, LocationEdge[]>();
   for (const edge of visibleEdges) {
     const mFrom = mappedIdByLocationId.get(edge.from_location_id);
@@ -559,6 +585,11 @@ function buildReducedPairsForScope(params: {
         )
       );
 
+      const minEdgeIndex = rGroup.reduce(
+        (best, e) => Math.min(best, edgeIndexById.get(e.id) ?? Number.MAX_SAFE_INTEGER),
+        Number.MAX_SAFE_INTEGER
+      );
+
       pairs.push({
         pairKey: rpk,
         u,
@@ -570,7 +601,9 @@ function buildReducedPairsForScope(params: {
         distanceMeters,
         distanceMode,
         isVertical,
+        dirUV,
         unitVectorUV: COMPASS_UNIT_VECTORS[dirUV],
+        minEdgeIndex,
         asymmetricReason,
       });
     }
@@ -584,18 +617,40 @@ function buildReducedPairsForScope(params: {
   };
 }
 
-function solveFixedDistancePositions(params: {
+function solvePriorityBasisPositions(params: {
   nodeIds: string[];
   pairs: ReducedPair[];
   uf: UnionFind;
   dofByNode: Map<string, string>;
   pinnedDofCoords: Map<string, { x: number; y: number }>;
   preferredOriginDof?: string | null;
+  changedEdgeIds?: Set<string>;
+  scopeContainerId: string | null;
+  mappedIdByLocationId: Map<string, string>;
+  directLocationIds: Set<string>;
+  nodeIdsByDof: Map<string, string[]>;
+  anchorResolutions: Record<string, AnchorResolution>;
+  anchorDiagnostics: EdgeConsistencyDiagnostic[];
 }): {
   dofPositions: Map<string, { x: number; y: number }>;
   componentByDof: Map<string, string>;
 } {
-  const { nodeIds, pairs, uf, dofByNode, pinnedDofCoords, preferredOriginDof } = params;
+  const {
+    nodeIds,
+    pairs,
+    uf,
+    dofByNode,
+    pinnedDofCoords,
+    preferredOriginDof,
+    changedEdgeIds,
+    scopeContainerId,
+    mappedIdByLocationId,
+    directLocationIds,
+    nodeIdsByDof,
+    anchorResolutions,
+    anchorDiagnostics,
+  } = params;
+  const changedSet = changedEdgeIds ?? new Set<string>();
   const dofSet = new Set<string>();
   for (const id of nodeIds) dofSet.add(uf.find(id));
   const dofs = Array.from(dofSet).sort((a, b) => a.localeCompare(b));
@@ -613,9 +668,31 @@ function solveFixedDistancePositions(params: {
     adj.get(dv)?.push(du);
   }
 
+  // Priority order: locked first -> changed/edited -> established oldest -> newest last
+  const getTier = (p: ReducedPair): number => {
+    if (p.distanceMode === "locked") return 0;
+    const isChanged =
+      changedSet.has(p.primaryEdge.id) ||
+      (p.reciprocalEdge ? changedSet.has(p.reciprocalEdge.id) : false);
+    if (isChanged) return 1;
+    return 2;
+  };
+  const orderedPairs = [...horizPairs].sort((a, b) => {
+    const ta = getTier(a);
+    const tb = getTier(b);
+    if (ta !== tb) return ta - tb;
+    if (a.minEdgeIndex !== b.minEdgeIndex) return a.minEdgeIndex - b.minEdgeIndex;
+    return a.pairKey.localeCompare(b.pairKey);
+  });
+
   // Connected components of DOFs
   const componentByDof = new Map<string, string>();
-  const effectivePins = new Map(pinnedDofCoords);
+  const placed = new Map<string, { x: number; y: number }>();
+  const clusterUf = new UnionFind();
+  for (const [d, pt] of pinnedDofCoords.entries()) {
+    placed.set(d, { ...pt });
+    clusterUf.find(d);
+  }
 
   for (const start of dofs) {
     if (componentByDof.has(start)) continue;
@@ -632,82 +709,116 @@ function solveFixedDistancePositions(params: {
         }
       }
     }
-    const hasPin = comp.some((d) => effectivePins.has(d));
+    const hasPin = comp.some((d) => placed.has(d));
     if (!hasPin && comp.length > 0) {
-      const originDof =
-        preferredOriginDof && comp.includes(preferredOriginDof)
-          ? preferredOriginDof
-          : [...comp].sort((a, b) => a.localeCompare(b))[0];
-      effectivePins.set(originDof, { x: 0, y: 0 });
+      const compSet = new Set(comp);
+      let originDof: string | null = null;
+      if (preferredOriginDof && compSet.has(preferredOriginDof)) {
+        originDof = preferredOriginDof;
+      } else {
+        const firstPair = orderedPairs.find(
+          (p) =>
+            compSet.has(dofByNode.get(p.u)!) && compSet.has(dofByNode.get(p.v)!)
+        );
+        if (firstPair) {
+          originDof = dofByNode.get(firstPair.u)!;
+        } else {
+          originDof = [...comp].sort((a, b) => a.localeCompare(b))[0];
+        }
+      }
+      placed.set(originDof, { x: 0, y: 0 });
+      clusterUf.find(originDof);
     }
   }
 
-  const freeDofs = dofs.filter((d) => !effectivePins.has(d));
-  const dofPositions = new Map<string, { x: number; y: number }>();
-  for (const [d, pt] of effectivePins.entries()) {
-    dofPositions.set(d, { ...pt });
+  for (const d of dofs) {
+    if (!placed.has(d)) {
+      clusterUf.find(d);
+    }
   }
 
-  if (freeDofs.length === 0) {
-    return { dofPositions, componentByDof };
+  // Grow Prim-style priority spanning forest (anchors & oldest established links take precedence)
+  const basisPairKeys = new Set<string>();
+  const basisPairs: ReducedPair[] = [];
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const p of orderedPairs) {
+      if (basisPairKeys.has(p.pairKey)) continue;
+      const du = dofByNode.get(p.u)!;
+      const dv = dofByNode.get(p.v)!;
+      if (du === dv) continue;
+      const pu = placed.get(du);
+      const pv = placed.get(dv);
+      if (pu && !pv) {
+        placed.set(dv, {
+          x: pu.x + p.distanceMeters * p.unitVectorUV.x,
+          y: pu.y + p.distanceMeters * p.unitVectorUV.y,
+        });
+        clusterUf.union(du, dv);
+        basisPairKeys.add(p.pairKey);
+        basisPairs.push(p);
+        progressed = true;
+        break;
+      }
+      if (!pu && pv) {
+        placed.set(du, {
+          x: pv.x - p.distanceMeters * p.unitVectorUV.x,
+          y: pv.y - p.distanceMeters * p.unitVectorUV.y,
+        });
+        clusterUf.union(du, dv);
+        basisPairKeys.add(p.pairKey);
+        basisPairs.push(p);
+        progressed = true;
+        break;
+      }
+    }
   }
 
-  const freeIdx = new Map(freeDofs.map((d, idx) => [d, idx]));
-  const n = freeDofs.length;
-  const H = new Float64Array(n * n);
-  const bx = new Float64Array(n);
-  const by = new Float64Array(n);
-
-  const nonZeroMeters = horizPairs.map((p) => p.distanceMeters).sort((a, b) => a - b);
-  const medianM =
-    nonZeroMeters.length > 0
-      ? nonZeroMeters[Math.floor(nonZeroMeters.length / 2)]
-      : 100;
-
-  for (const p of horizPairs) {
+  // Targeted multi-anchor bridge reconciliation only when free L-bends span distinct anchor pins
+  const lateralCrossPinBridges = orderedPairs.filter((p) => {
+    if (basisPairKeys.has(p.pairKey)) return false;
     const du = dofByNode.get(p.u)!;
     const dv = dofByNode.get(p.v)!;
-    if (du === dv) continue;
+    if (du === dv) return false;
+    if (clusterUf.find(du) === clusterUf.find(dv)) return false;
+    if (pinnedDofCoords.has(du) && pinnedDofCoords.has(dv)) return false;
+    const pu = placed.get(du);
+    const pv = placed.get(dv);
+    if (!pu || !pv) return false;
+    const dx = pv.x - pu.x;
+    const dy = pv.y - pu.y;
+    const euclid = Math.hypot(dx, dy);
+    const eLat = Math.abs(-dx * p.unitVectorUV.y + dy * p.unitVectorUV.x);
+    return eLat > lateralTolerance(Math.max(1, euclid));
+  });
 
-    const baseStiff = Math.pow(medianM / Math.max(p.distanceMeters, 10), 2);
-    const w = p.distanceMode === "locked" ? baseStiff * 1000 : baseStiff;
-    const dx = p.distanceMeters * p.unitVectorUV.x;
-    const dy = p.distanceMeters * p.unitVectorUV.y;
-
-    const iu = freeIdx.get(du);
-    const iv = freeIdx.get(dv);
-    const pu = effectivePins.get(du);
-    const pv = effectivePins.get(dv);
-
-    if (iu !== undefined && iv !== undefined) {
-      H[iu * n + iu] += w;
-      H[iv * n + iv] += w;
-      H[iu * n + iv] -= w;
-      H[iv * n + iu] -= w;
-      bx[iu] -= w * dx;
-      bx[iv] += w * dx;
-      by[iu] -= w * dy;
-      by[iv] += w * dy;
-    } else if (iu !== undefined && pv) {
-      H[iu * n + iu] += w;
-      bx[iu] += w * (pv.x - dx);
-      by[iu] += w * (pv.y - dy);
-    } else if (iv !== undefined && pu) {
-      H[iv * n + iv] += w;
-      bx[iv] += w * (pu.x + dx);
-      by[iv] += w * (pu.y + dy);
+  if (lateralCrossPinBridges.length > 0) {
+    const bridgeCtx: ScopedSolverContext = {
+      scopeContainerId,
+      mappedIdByLocationId,
+      directLocationIds,
+      nodeIds,
+      pairs: [...basisPairs, ...lateralCrossPinBridges],
+      uf,
+      dofByNode,
+      nodeIdsByDof,
+      componentByDof,
+      pinnedDofCoords,
+      anchorResolutions,
+      anchorDiagnostics,
+      dofPositions: placed,
+    };
+    const { finalPos, conflictKindsByPairKey } = solveReconciliationInternal(
+      bridgeCtx,
+      changedSet
+    );
+    if (conflictKindsByPairKey.size === 0) {
+      return { dofPositions: finalPos, componentByDof };
     }
   }
 
-  const solX = solveSpdCholesky(n, H, bx);
-  const solY = solveSpdCholesky(n, H, by);
-  for (let i = 0; i < n; i++) {
-    dofPositions.set(freeDofs[i], {
-      x: solX ? solX[i] : 0,
-      y: solY ? solY[i] : 0,
-    });
-  }
-  return { dofPositions, componentByDof };
+  return { dofPositions: placed, componentByDof };
 }
 
 function solveScopeLayoutInternal(params: {
@@ -717,6 +828,7 @@ function solveScopeLayoutInternal(params: {
   visibleEdges: readonly LocationEdge[];
   excludedSubtreeContainerIds: Set<string>;
   depth: number;
+  changedEdgeIds?: Set<string>;
 }): ScopedSolverContext {
   const {
     scopeContainerId,
@@ -725,6 +837,7 @@ function solveScopeLayoutInternal(params: {
     visibleEdges,
     excludedSubtreeContainerIds,
     depth,
+    changedEdgeIds,
   } = params;
 
   const contById = new Map(containers.map((c) => [c.id, c]));
@@ -996,13 +1109,20 @@ function solveScopeLayoutInternal(params: {
   const startMapped = startLoc ? mappedIdByLocationId.get(startLoc.id) : undefined;
   const preferredOriginDof = startMapped ? dofByNode.get(startMapped) ?? null : null;
 
-  const { dofPositions, componentByDof } = solveFixedDistancePositions({
+  const { dofPositions, componentByDof } = solvePriorityBasisPositions({
     nodeIds,
     pairs,
     uf,
     dofByNode,
     pinnedDofCoords,
     preferredOriginDof,
+    changedEdgeIds,
+    scopeContainerId,
+    mappedIdByLocationId,
+    directLocationIds,
+    nodeIdsByDof,
+    anchorResolutions,
+    anchorDiagnostics,
   });
 
   return {
@@ -1026,6 +1146,7 @@ function solveReconciliationInternal(
   ctx: ScopedSolverContext,
   changedEdgeIds: Set<string>
 ): {
+  finalPos: Map<string, { x: number; y: number }>;
   proposedMetersByPairKey: Map<string, number>;
   conflictKindsByPairKey: Map<string, "compass_conflict" | "overconstrained_locked">;
 } {
@@ -1125,7 +1246,8 @@ function solveReconciliationInternal(
         const isEdited =
           changedEdgeIds.has(p.primaryEdge.id) ||
           (p.reciprocalEdge ? changedEdgeIds.has(p.reciprocalEdge.id) : false);
-        const alphaBase = Math.pow(medianM / Math.max(p.distanceMeters, 10), 2);
+        const ratio = medianM / Math.max(p.distanceMeters, 10);
+        const alphaBase = Math.min(16, Math.max(0.0625, ratio * ratio));
         const alpha = isEdited ? alphaBase * 25 : alphaBase;
         const kappa = (LAMBDA_GEO * alpha) / (LAMBDA_GEO + alpha);
         addPairToSystem(du, dv, ux, uy, nx, ny, kappa, LAMBDA_GEO, d0);
@@ -1167,7 +1289,8 @@ function solveReconciliationInternal(
       const isEdited =
         changedEdgeIds.has(p.primaryEdge.id) ||
         (p.reciprocalEdge ? changedEdgeIds.has(p.reciprocalEdge.id) : false);
-      const alphaBase = Math.pow(medianM / Math.max(p.distanceMeters, 10), 2);
+      const ratio = medianM / Math.max(p.distanceMeters, 10);
+      const alphaBase = Math.min(16, Math.max(0.0625, ratio * ratio));
       const alpha = isEdited ? alphaBase * 25 : alphaBase;
       const dStar = (LAMBDA_GEO * proj + alpha * p.distanceMeters) / (LAMBDA_GEO + alpha);
 
@@ -1210,13 +1333,112 @@ function solveReconciliationInternal(
     }
   }
 
-  return { proposedMetersByPairKey, conflictKindsByPairKey };
+  return { finalPos, proposedMetersByPairKey, conflictKindsByPairKey };
+}
+
+export interface ImpliedEdgeGeometry {
+  distanceMeters: number;
+  compassDirection: CompassDirection;
+  dx: number;
+  dy: number;
+}
+
+/**
+ * Estimate implied Euclidean distance and 8-way compass direction between two locations
+ * when they already share a 2D connected component or independent anchored coordinates.
+ * Returns `null` when connecting an unlinked node or across disconnected components.
+ */
+export function estimateImpliedEdgeDistance(params: {
+  fromLocationId: string;
+  toLocationId: string;
+  scopeContainerId: string | null;
+  containers: readonly LocationContainer[];
+  locations: readonly LocationNode[];
+  edges: readonly LocationEdge[];
+  options?: ConsistencyAnalysisOptions;
+}): ImpliedEdgeGeometry | null {
+  const {
+    fromLocationId,
+    toLocationId,
+    scopeContainerId,
+    containers,
+    locations,
+    edges,
+    options,
+  } = params;
+  if (!fromLocationId || !toLocationId || fromLocationId === toLocationId) {
+    return null;
+  }
+  const contById = new Map(containers.map((c) => [c.id, c]));
+  const locById = new Map(locations.map((l) => [l.id, l]));
+  const fromLoc = locById.get(fromLocationId);
+  const toLoc = locById.get(toLocationId);
+  if (!fromLoc || !toLoc) return null;
+
+  const visibleEdges = getVisibleEdges(edges, options);
+
+  const tryScope = (targetScopeId: string | null): ImpliedEdgeGeometry | null => {
+    const ctx = solveScopeLayoutInternal({
+      scopeContainerId: targetScopeId,
+      containers,
+      locations,
+      visibleEdges,
+      excludedSubtreeContainerIds: new Set<string>(),
+      depth: 0,
+    });
+    const mFrom = ctx.mappedIdByLocationId.get(fromLocationId);
+    const mTo = ctx.mappedIdByLocationId.get(toLocationId);
+    if (!mFrom || !mTo || mFrom === mTo) return null;
+    const du = ctx.dofByNode.get(mFrom);
+    const dv = ctx.dofByNode.get(mTo);
+    if (!du || !dv || du === dv) return null;
+
+    const compU = ctx.componentByDof.get(du);
+    const compV = ctx.componentByDof.get(dv);
+    const pinnedComps = new Set<string>();
+    for (const pinnedDof of ctx.pinnedDofCoords.keys()) {
+      const c = ctx.componentByDof.get(pinnedDof);
+      if (c) pinnedComps.add(c);
+    }
+    const sameComp = Boolean(compU && compU === compV);
+    const bothAnchored = Boolean(
+      compU && compV && pinnedComps.has(compU) && pinnedComps.has(compV)
+    );
+    if (!sameComp && !bothAnchored) return null;
+
+    const pu = ctx.dofPositions.get(du);
+    const pv = ctx.dofPositions.get(dv);
+    if (!pu || !pv) return null;
+    const dx = pv.x - pu.x;
+    const dy = pv.y - pu.y;
+    const euclid = Math.hypot(dx, dy);
+    if (!Number.isFinite(euclid) || euclid < 1) return null;
+    return {
+      distanceMeters: Math.max(1, Math.round(euclid)),
+      compassDirection: vectorToCompass(dx, dy),
+      dx,
+      dy,
+    };
+  };
+
+  const directRes = tryScope(scopeContainerId);
+  if (directRes) return directRes;
+
+  const lcaScope = findLowestCommonContainer(
+    fromLoc.container_id,
+    toLoc.container_id,
+    contById
+  );
+  if (lcaScope !== scopeContainerId) {
+    return tryScope(lcaScope);
+  }
+  return null;
 }
 
 /**
  * Analyze 2D compass-vector & metric consistency for a given container scope
  * (or World Root when `scopeContainerId === null`), including outer-scope anchors,
- * triangle-inequality shortcuts, and Schur-complement reconciliation proposals.
+ * 25° 8-way compass sector validation, triangle-inequality shortcuts, and priority basis reconciliation.
  */
 export function analyzeSpatialConsistency(params: {
   scopeContainerId: string | null;
@@ -1237,15 +1459,38 @@ export function analyzeSpatialConsistency(params: {
     visibleEdges,
     excludedSubtreeContainerIds: new Set<string>(),
     depth: 0,
+    changedEdgeIds: changedSet,
   });
-
-  const { proposedMetersByPairKey, conflictKindsByPairKey } =
-    solveReconciliationInternal(ctx, changedSet);
 
   const diagnostics: EdgeConsistencyDiagnostic[] = [...ctx.anchorDiagnostics];
   const diagnosticsByEdgeId: Record<string, EdgeConsistencyDiagnostic> = {};
   const proposedAdjustments: ReconciliationAdjustment[] = [];
   const proposedByEdgeId: Record<string, ReconciliationAdjustment> = {};
+
+  // Pre-pass: record Euclidean implied distances for flexible mismatching links so alternate-path
+  // triangle checks don't treat an erroneous 20m chord as a bogus short alternate path
+  const suggestedByDistanceMismatchPair = new Map<string, number>();
+  for (const p of ctx.pairs) {
+    if (p.distanceMode === "non_euclidean" || p.isVertical) continue;
+    const du = ctx.dofByNode.get(p.u)!;
+    const dv = ctx.dofByNode.get(p.v)!;
+    const pu = ctx.dofPositions.get(du) ?? { x: 0, y: 0 };
+    const pv = ctx.dofPositions.get(dv) ?? { x: 0, y: 0 };
+    const dx = pv.x - pu.x;
+    const dy = pv.y - pu.y;
+    const euclid = Math.hypot(dx, dy);
+    const proj = dx * p.unitVectorUV.x + dy * p.unitVectorUV.y;
+    const eDist = Math.round(Math.abs(euclid - p.distanceMeters));
+    const distTol = longitudinalTolerance(euclid);
+    const cosTheta = euclid > 1e-6 ? proj / euclid : 1;
+    const compassValid = euclid <= 5 || cosTheta >= MIN_COMPASS_COS;
+    if (compassValid && eDist > distTol && p.distanceMode === "flexible") {
+      suggestedByDistanceMismatchPair.set(
+        p.pairKey,
+        Math.max(1, Math.round(euclid))
+      );
+    }
+  }
 
   // Build alternate-path graph for triangle-inequality checks over non-non_euclidean pairs
   const physicalPairs = ctx.pairs.filter((p) => p.distanceMode !== "non_euclidean");
@@ -1257,8 +1502,9 @@ export function analyzeSpatialConsistency(params: {
       if (p.pairKey === excludePairKey) continue;
       if (!adj.has(p.u)) adj.set(p.u, []);
       if (!adj.has(p.v)) adj.set(p.v, []);
-      adj.get(p.u)!.push({ to: p.v, w: p.distanceMeters });
-      adj.get(p.v)!.push({ to: p.u, w: p.distanceMeters });
+      const weight = suggestedByDistanceMismatchPair.get(p.pairKey) ?? p.distanceMeters;
+      adj.get(p.u)!.push({ to: p.v, w: weight });
+      adj.get(p.v)!.push({ to: p.u, w: weight });
     }
 
     while (true) {
@@ -1318,29 +1564,20 @@ export function analyzeSpatialConsistency(params: {
     const dv = ctx.dofByNode.get(p.v)!;
     const pu = ctx.dofPositions.get(du) ?? { x: 0, y: 0 };
     const pv = ctx.dofPositions.get(dv) ?? { x: 0, y: 0 };
-    const rx = pv.x - pu.x - p.distanceMeters * p.unitVectorUV.x;
-    const ry = pv.y - pu.y - p.distanceMeters * p.unitVectorUV.y;
-    const eLong = Math.round(Math.abs(rx * p.unitVectorUV.x + ry * p.unitVectorUV.y));
-    const eLat = Math.round(Math.abs(-rx * p.unitVectorUV.y + ry * p.unitVectorUV.x));
-
-    const longTol = longitudinalTolerance(p.distanceMeters);
-    const latTol = lateralTolerance(p.distanceMeters);
-    const hasResidualMismatch = eLong > longTol || eLat > latTol;
-
-    const conflictKind = conflictKindsByPairKey.get(p.pairKey);
-    const rawProposed = proposedMetersByPairKey.get(p.pairKey) ?? p.distanceMeters;
-    const hasMeaningfulProposal =
-      p.distanceMode === "flexible" &&
-      !conflictKind &&
-      Math.abs(rawProposed - p.distanceMeters) > Math.max(1, Math.min(longTol, 5));
-
-    // Triangle-inequality check
-    const altDist = shortestAltDistance(p.pairKey, p.u, p.v);
-    const violatesTriangle =
-      Number.isFinite(altDist) && altDist + longTol < p.distanceMeters;
+    const dx = pv.x - pu.x;
+    const dy = pv.y - pu.y;
+    const euclid = Math.hypot(dx, dy);
+    const suggestedEuclid = Math.max(1, Math.round(euclid));
+    const proj = dx * p.unitVectorUV.x + dy * p.unitVectorUV.y;
+    const eLat = Math.round(Math.abs(-dx * p.unitVectorUV.y + dy * p.unitVectorUV.x));
+    const eDist = Math.round(Math.abs(euclid - p.distanceMeters));
+    const distTol = longitudinalTolerance(euclid);
+    const cosTheta = euclid > 1e-6 ? proj / euclid : 1;
+    const compassValid = euclid <= 5 || cosTheta >= MIN_COMPASS_COS;
+    const impliedCompass = euclid > 1e-6 ? vectorToCompass(dx, dy) : null;
 
     let diag: EdgeConsistencyDiagnostic | null = null;
-    if (conflictKind) {
+    if (!compassValid) {
       diag = {
         pairKey: p.pairKey,
         primaryEdgeId: p.primaryEdge.id,
@@ -1349,61 +1586,99 @@ export function analyzeSpatialConsistency(params: {
         toLocationId: p.primaryEdge.to_location_id,
         fromName,
         toName,
-        kind: conflictKind,
+        kind: "compass_conflict",
         severity: "error",
         currentMeters: p.distanceMeters,
         suggestedMeters: null,
-        longitudinalErrorMeters: eLong,
+        longitudinalErrorMeters: eDist,
         lateralErrorMeters: eLat,
-        message:
-          conflictKind === "compass_conflict"
-            ? `${fromName} ↔ ${toName}: Compass direction conflicts with surrounding loop/anchors (lateral offset ~${eLat}m). Adjust compass bearing or mark Non-Euclidean.`
-            : `${fromName} ↔ ${toName}: Locked distance (${p.distanceMeters}m) conflicts with anchors or other locked links (~${Math.max(eLong, eLat)}m discrepancy).`,
+        message: `${fromName} ↔ ${toName}: Compass direction (${p.dirUV}) conflicts with surrounding geometry (implies ~${suggestedEuclid}m${
+          impliedCompass ? ` ${impliedCompass}` : ""
+        }). Adjust compass bearing or mark Non-Euclidean.`,
         scopeContainerId,
       };
-    } else if (hasResidualMismatch || hasMeaningfulProposal) {
-      const suggested =
-        p.distanceMode === "flexible" && rawProposed >= 1 && rawProposed !== p.distanceMeters
-          ? rawProposed
-          : null;
-      diag = {
-        pairKey: p.pairKey,
-        primaryEdgeId: p.primaryEdge.id,
-        reciprocalEdgeId: p.reciprocalEdge?.id ?? null,
-        fromLocationId: p.primaryEdge.from_location_id,
-        toLocationId: p.primaryEdge.to_location_id,
-        fromName,
-        toName,
-        kind: "distance_mismatch",
-        severity: "warning",
-        currentMeters: p.distanceMeters,
-        suggestedMeters: suggested,
-        longitudinalErrorMeters: eLong,
-        lateralErrorMeters: eLat,
-        message: suggested
-          ? `${fromName} ↔ ${toName} is ${p.distanceMeters}m, but anchors/loop geometry imply ~${suggested}m.`
-          : `${fromName} ↔ ${toName} (${p.distanceMeters}m) has a ~${Math.max(eLong, eLat)}m geometric mismatch.`,
-        scopeContainerId,
-      };
-    } else if (violatesTriangle) {
-      diag = {
-        pairKey: p.pairKey,
-        primaryEdgeId: p.primaryEdge.id,
-        reciprocalEdgeId: p.reciprocalEdge?.id ?? null,
-        fromLocationId: p.primaryEdge.from_location_id,
-        toLocationId: p.primaryEdge.to_location_id,
-        fromName,
-        toName,
-        kind: "triangle_inequality",
-        severity: "warning",
-        currentMeters: p.distanceMeters,
-        suggestedMeters: Math.max(1, Math.round(altDist)),
-        longitudinalErrorMeters: Math.round(p.distanceMeters - altDist),
-        lateralErrorMeters: 0,
-        shortcutMeters: Math.round(altDist),
-        message: `${fromName} ↔ ${toName} (${p.distanceMeters}m) is longer than an alternate path (${Math.round(altDist)}m). Reconcile or mark Non-Euclidean.`,
-        scopeContainerId,
-      };
+    } else if (eDist > distTol) {
+      if (p.distanceMode === "locked") {
+        diag = {
+          pairKey: p.pairKey,
+          primaryEdgeId: p.primaryEdge.id,
+          reciprocalEdgeId: p.reciprocalEdge?.id ?? null,
+          fromLocationId: p.primaryEdge.from_location_id,
+          toLocationId: p.primaryEdge.to_location_id,
+          fromName,
+          toName,
+          kind: "overconstrained_locked",
+          severity: "error",
+          currentMeters: p.distanceMeters,
+          suggestedMeters: null,
+          longitudinalErrorMeters: eDist,
+          lateralErrorMeters: eLat,
+          message: `${fromName} ↔ ${toName}: Locked distance (${p.distanceMeters}m) conflicts with anchors or other locked links (geometry implies ~${suggestedEuclid}m).`,
+          scopeContainerId,
+        };
+      } else {
+        diag = {
+          pairKey: p.pairKey,
+          primaryEdgeId: p.primaryEdge.id,
+          reciprocalEdgeId: p.reciprocalEdge?.id ?? null,
+          fromLocationId: p.primaryEdge.from_location_id,
+          toLocationId: p.primaryEdge.to_location_id,
+          fromName,
+          toName,
+          kind: "distance_mismatch",
+          severity: "warning",
+          currentMeters: p.distanceMeters,
+          suggestedMeters: suggestedEuclid,
+          longitudinalErrorMeters: eDist,
+          lateralErrorMeters: eLat,
+          message: `${fromName} ↔ ${toName} is ${p.distanceMeters}m, but anchors/loop geometry imply ~${suggestedEuclid}m.`,
+          scopeContainerId,
+        };
+
+        if (Math.abs(suggestedEuclid - p.distanceMeters) >= 1) {
+          const adj: ReconciliationAdjustment = {
+            edgeId: p.primaryEdge.id,
+            reciprocalEdgeId: p.reciprocalEdge?.id ?? null,
+            fromLocationId: p.primaryEdge.from_location_id,
+            toLocationId: p.primaryEdge.to_location_id,
+            fromName,
+            toName,
+            currentMeters: p.distanceMeters,
+            proposedMeters: suggestedEuclid,
+            deltaMeters: suggestedEuclid - p.distanceMeters,
+            scopeContainerId,
+          };
+          proposedAdjustments.push(adj);
+          proposedByEdgeId[p.primaryEdge.id] = adj;
+          if (p.reciprocalEdge) {
+            proposedByEdgeId[p.reciprocalEdge.id] = adj;
+          }
+        }
+      }
+    } else {
+      const altDist = shortestAltDistance(p.pairKey, p.u, p.v);
+      const violatesTriangle =
+        Number.isFinite(altDist) && altDist + distTol < p.distanceMeters;
+      if (violatesTriangle) {
+        diag = {
+          pairKey: p.pairKey,
+          primaryEdgeId: p.primaryEdge.id,
+          reciprocalEdgeId: p.reciprocalEdge?.id ?? null,
+          fromLocationId: p.primaryEdge.from_location_id,
+          toLocationId: p.primaryEdge.to_location_id,
+          fromName,
+          toName,
+          kind: "triangle_inequality",
+          severity: "warning",
+          currentMeters: p.distanceMeters,
+          suggestedMeters: Math.max(1, Math.round(altDist)),
+          longitudinalErrorMeters: Math.round(p.distanceMeters - altDist),
+          lateralErrorMeters: 0,
+          shortcutMeters: Math.round(altDist),
+          message: `${fromName} ↔ ${toName} (${p.distanceMeters}m) is longer than an alternate path (${Math.round(altDist)}m). Reconcile or mark Non-Euclidean.`,
+          scopeContainerId,
+        };
+      }
     }
 
     if (diag) {
@@ -1411,32 +1686,6 @@ export function analyzeSpatialConsistency(params: {
       diagnosticsByEdgeId[p.primaryEdge.id] = diag;
       if (p.reciprocalEdge) {
         diagnosticsByEdgeId[p.reciprocalEdge.id] = diag;
-      }
-    }
-
-    if (
-      p.distanceMode === "flexible" &&
-      !conflictKind &&
-      rawProposed >= 1 &&
-      Math.abs(rawProposed - p.distanceMeters) >= 1 &&
-      (hasResidualMismatch || hasMeaningfulProposal)
-    ) {
-      const adj: ReconciliationAdjustment = {
-        edgeId: p.primaryEdge.id,
-        reciprocalEdgeId: p.reciprocalEdge?.id ?? null,
-        fromLocationId: p.primaryEdge.from_location_id,
-        toLocationId: p.primaryEdge.to_location_id,
-        fromName,
-        toName,
-        currentMeters: p.distanceMeters,
-        proposedMeters: rawProposed,
-        deltaMeters: rawProposed - p.distanceMeters,
-        scopeContainerId,
-      };
-      proposedAdjustments.push(adj);
-      proposedByEdgeId[p.primaryEdge.id] = adj;
-      if (p.reciprocalEdge) {
-        proposedByEdgeId[p.reciprocalEdge.id] = adj;
       }
     }
   }

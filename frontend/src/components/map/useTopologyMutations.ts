@@ -8,7 +8,10 @@ import type {
 } from "../../types";
 import {
   computeReconciliationPlan,
+  estimateImpliedEdgeDistance,
+  formatSuggestedDistanceLabel,
   isValidSpatialAnchor,
+  type ConsistencyAnalysisOptions,
   type ReconciliationAdjustment,
 } from "./spatialConsistency";
 import type {
@@ -278,6 +281,68 @@ export function buildBidirectionalEdgePair(params: {
     });
   }
   return edges;
+}
+
+/**
+ * Resolve default distance for a newly created edge: uses existing loop/anchor geometry
+ * when both endpoints already share a 2D coordinate frame, falling back to container defaults otherwise.
+ */
+export function resolveDefaultNewEdgeDistance(params: {
+  fromLoc: LocationNode;
+  toLoc: LocationNode;
+  sourceKind: "location" | "container";
+  targetKind: "location" | "container";
+  explicitDistanceMeters?: number;
+  scopeContainerId: string | null;
+  containers: readonly LocationContainer[];
+  locations: readonly LocationNode[];
+  edges: readonly LocationEdge[];
+  options?: ConsistencyAnalysisOptions;
+}): { distanceMeters: number; fromGeometry: boolean } {
+  const {
+    fromLoc,
+    toLoc,
+    sourceKind,
+    targetKind,
+    explicitDistanceMeters,
+    scopeContainerId,
+    containers,
+    locations,
+    edges,
+    options,
+  } = params;
+  const fallbackMeters =
+    fromLoc.container_id && fromLoc.container_id === toLoc.container_id
+      ? DEFAULT_INTERIOR_DISTANCE_METERS
+      : fromLoc.container_id !== toLoc.container_id ||
+        sourceKind === "container" ||
+        targetKind === "container" ||
+        fromLoc.is_hub ||
+        toLoc.is_hub
+      ? DEFAULT_EXTERIOR_DISTANCE_METERS
+      : DEFAULT_FALLBACK_DISTANCE_METERS;
+  if (explicitDistanceMeters !== undefined) {
+    return {
+      distanceMeters: clampEdgeDistanceMeters(explicitDistanceMeters, fallbackMeters),
+      fromGeometry: false,
+    };
+  }
+  const implied = estimateImpliedEdgeDistance({
+    fromLocationId: fromLoc.id,
+    toLocationId: toLoc.id,
+    scopeContainerId,
+    containers,
+    locations,
+    edges,
+    options,
+  });
+  if (implied) {
+    return {
+      distanceMeters: clampEdgeDistanceMeters(implied.distanceMeters, fallbackMeters),
+      fromGeometry: true,
+    };
+  }
+  return { distanceMeters: fallbackMeters, fromGeometry: false };
 }
 
 export interface UseTopologyMutationsParams {
@@ -767,21 +832,18 @@ export function useTopologyMutations({
       }
       if (srcInfo.loc.id === tgtInfo.loc.id) return;
 
-      const defaultMeters =
-        srcInfo.loc.container_id &&
-        srcInfo.loc.container_id === tgtInfo.loc.container_id
-          ? DEFAULT_INTERIOR_DISTANCE_METERS
-          : srcInfo.loc.container_id !== tgtInfo.loc.container_id ||
-            opts.sourceKind === "container" ||
-            opts.targetKind === "container" ||
-            srcInfo.loc.is_hub ||
-            tgtInfo.loc.is_hub
-          ? DEFAULT_EXTERIOR_DISTANCE_METERS
-          : DEFAULT_FALLBACK_DISTANCE_METERS;
-      const distanceMeters = clampEdgeDistanceMeters(
-        opts.distanceMeters ?? defaultMeters,
-        defaultMeters
-      );
+      const { distanceMeters, fromGeometry } = resolveDefaultNewEdgeDistance({
+        fromLoc: srcInfo.loc,
+        toLoc: tgtInfo.loc,
+        sourceKind: opts.sourceKind,
+        targetKind: opts.targetKind,
+        explicitDistanceMeters: opts.distanceMeters,
+        scopeContainerId: currentContainerId,
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: workingEdges,
+        options: { mode, unlockLore, revealedEdgeIds },
+      });
 
       // Avoid duplicate identical direct edges
       const alreadyConnected = workingEdges.some(
@@ -893,6 +955,13 @@ export function useTopologyMutations({
         undefined,
         resolvedTarget.slot
       );
+      if (fromGeometry) {
+        setStatusNotice(
+          `Linked ${srcInfo.loc.name} ↔ ${tgtInfo.loc.name} (${formatSuggestedDistanceLabel(
+            distanceMeters
+          )} from map geometry).`
+        );
+      }
     },
     [
       locationMap,
@@ -907,6 +976,10 @@ export function useTopologyMutations({
       setStatusNotice,
       setHubCollisionModal,
       setPromotionPrompt,
+      currentContainerId,
+      mode,
+      unlockLore,
+      revealedEdgeIds,
     ]
   );
 

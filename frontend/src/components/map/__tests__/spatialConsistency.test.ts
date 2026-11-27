@@ -4,8 +4,11 @@ import {
   analyzeSpatialConsistency,
   analyzeWorldConsistencySummary,
   computeReconciliationPlan,
+  estimateImpliedEdgeDistance,
+  formatSuggestedDistanceLabel,
   isValidSpatialAnchor,
 } from "../spatialConsistency";
+import { resolveDefaultNewEdgeDistance } from "../useTopologyMutations";
 
 const mkCont = (
   id: string,
@@ -372,5 +375,155 @@ describe("spatialConsistency", () => {
         edges: asymEdges,
       })
     ).toHaveLength(0);
+  });
+
+  it("validates 1-K -- 500m -- 1-L -- 500m -- 2-L -- 500m -- 3-L triangle inside NE octant without distorting grid or cascading proposals", () => {
+    const containers = [mkCont("sewers", "Sewers", 1)];
+    const t1k = mkLoc("t1k", "Tunnel 1-K", "sewers");
+    const t1l = mkLoc("t1l", "Tunnel 1-L", "sewers", { is_starting_location: true });
+    const t2l = mkLoc("t2l", "Tunnel 2-L", "sewers");
+    const t3l = mkLoc("t3l", "Tunnel 3-L", "sewers");
+    const t1m = mkLoc("t1m", "Tunnel 1-M", "sewers");
+    const t2m = mkLoc("t2m", "Tunnel 2-M", "sewers");
+    const unlinked = mkLoc("isolated", "Side Chamber", "sewers");
+
+    const baseGridEdges: LocationEdge[] = [
+      ...mkPair("k_1l", "t1k", "t1l", "E", 500),
+      ...mkPair("1l_2l", "t1l", "t2l", "N", 500),
+      ...mkPair("2l_3l", "t2l", "t3l", "N", 500),
+      ...mkPair("1l_1m", "t1l", "t1m", "E", 500),
+      ...mkPair("1m_2m", "t1m", "t2m", "N", 500),
+      ...mkPair("2l_2m", "t2l", "t2m", "E", 500),
+    ];
+    const locations = [t1k, t1l, t2l, t3l, t1m, t2m, unlinked];
+
+    // 1. Implied distance before adding chord: sqrt(500^2 + 1000^2) = 1118m NE
+    const implied = estimateImpliedEdgeDistance({
+      fromLocationId: "t1k",
+      toLocationId: "t3l",
+      scopeContainerId: "sewers",
+      containers,
+      locations,
+      edges: baseGridEdges,
+    });
+    expect(implied?.distanceMeters).toBe(1118);
+    expect(implied?.compassDirection).toBe("NE");
+
+    // Unlinked same-container node yields null and falls back to 20m default
+    expect(
+      estimateImpliedEdgeDistance({
+        fromLocationId: "t1k",
+        toLocationId: "isolated",
+        scopeContainerId: "sewers",
+        containers,
+        locations,
+        edges: baseGridEdges,
+      })
+    ).toBeNull();
+    expect(
+      resolveDefaultNewEdgeDistance({
+        fromLoc: t1k,
+        toLoc: unlinked,
+        sourceKind: "location",
+        targetKind: "location",
+        scopeContainerId: "sewers",
+        containers,
+        locations,
+        edges: baseGridEdges,
+      })
+    ).toEqual({ distanceMeters: 20, fromGeometry: false });
+    expect(
+      resolveDefaultNewEdgeDistance({
+        fromLoc: t1k,
+        toLoc: t3l,
+        sourceKind: "location",
+        targetKind: "location",
+        scopeContainerId: "sewers",
+        containers,
+        locations,
+        edges: baseGridEdges,
+      })
+    ).toEqual({ distanceMeters: 1118, fromGeometry: true });
+
+    // 2. Valid 1118m NE and tolerance-rounded 1100m NE links yield 0 diagnostics
+    for (const validDist of [1118, 1100]) {
+      const okReport = analyzeSpatialConsistency({
+        scopeContainerId: "sewers",
+        containers,
+        locations,
+        edges: [...baseGridEdges, ...mkPair("k_3l", "t1k", "t3l", "NE", validDist)],
+      });
+      expect(okReport.diagnostics).toHaveLength(0);
+    }
+
+    // 3. Adding broken 20m or 1000m chord flags ONLY the new chord and proposes 1118m directly
+    for (const badDist of [20, 1000]) {
+      const badReport = analyzeSpatialConsistency({
+        scopeContainerId: "sewers",
+        containers,
+        locations,
+        edges: [...baseGridEdges, ...mkPair("k_3l", "t1k", "t3l", "NE", badDist)],
+      });
+      expect(badReport.diagnostics).toHaveLength(1);
+      expect(badReport.diagnostics[0].primaryEdgeId).toBe("k_3l_fwd");
+      expect(badReport.diagnostics[0].kind).toBe("distance_mismatch");
+      expect(badReport.diagnostics[0].suggestedMeters).toBe(1118);
+      expect(badReport.proposedAdjustments).toHaveLength(1);
+      expect(badReport.proposedAdjustments[0].proposedMeters).toBe(1118);
+      // Existing 500m grid edges stay completely clean
+      expect(badReport.diagnosticsByEdgeId["k_1l_fwd"]).toBeUndefined();
+      expect(badReport.diagnosticsByEdgeId["1l_2l_fwd"]).toBeUndefined();
+      expect(badReport.diagnosticsByEdgeId["2l_3l_fwd"]).toBeUndefined();
+    }
+
+    // 4. Wrong compass sector (NW instead of NE) flags ONLY the new chord as compass_conflict
+    const wrongCompassReport = analyzeSpatialConsistency({
+      scopeContainerId: "sewers",
+      containers,
+      locations,
+      edges: [...baseGridEdges, ...mkPair("k_3l", "t1k", "t3l", "NW", 1118)],
+    });
+    expect(wrongCompassReport.diagnostics).toHaveLength(1);
+    expect(wrongCompassReport.diagnostics[0].primaryEdgeId).toBe("k_3l_fwd");
+    expect(wrongCompassReport.diagnostics[0].kind).toBe("compass_conflict");
+    expect(wrongCompassReport.diagnostics[0].message).toContain("1118m NE");
+    expect(wrongCompassReport.proposedAdjustments).toHaveLength(0);
+    expect(formatSuggestedDistanceLabel(1118)).toBe("1118m");
+    expect(formatSuggestedDistanceLabel(1500)).toBe("1.5km");
+  });
+
+  it("reconciles multi-anchor L-bends cleanly without distorting non-bridge geometry", () => {
+    const containers = [mkCont("sector9", "Sector 9", 2), mkCont("sewers", "Sewers", 1, "sector9")];
+    const neon = mkLoc("neon", "Neon Rust", "sector9", { is_starting_location: true });
+    const chop = mkLoc("chop", "Chop Cathedral", "sector9");
+    const ent = mkLoc("ent", "Sewer Entrance", "sewers", { anchor_location_id: "neon" });
+    const t1l = mkLoc("t1l", "Tunnel 1-L", "sewers");
+    const t1m = mkLoc("t1m", "Tunnel 1-M", "sewers", { anchor_location_id: "chop" });
+
+    const edges: LocationEdge[] = [
+      ...mkPair("neon_chop", "neon", "chop", "NE", Math.round(Math.hypot(1500, 1000)), {
+        distance_mode: "locked",
+      }),
+      ...mkPair("ent_t1l", "ent", "t1l", "N", 500),
+      ...mkPair("t1l_t1m", "t1l", "t1m", "E", 500),
+    ];
+    // Wait: make Chop explicitly at (1500, 1000) via an intermediate north node from Neon so Chop sits cleanly at (1500, 1000)
+    const eastCorner = mkLoc("east", "East Corner", "sector9");
+    const exactEdges: LocationEdge[] = [
+      ...mkPair("n_e", "neon", "east", "E", 1500, { distance_mode: "locked" }),
+      ...mkPair("e_c", "east", "chop", "N", 1000, { distance_mode: "locked" }),
+      ...mkPair("ent_t1l", "ent", "t1l", "N", 500),
+      ...mkPair("t1l_t1m", "t1l", "t1m", "E", 500),
+    ];
+    expect(edges.length).toBeGreaterThan(0);
+
+    const report = analyzeSpatialConsistency({
+      scopeContainerId: "sewers",
+      containers,
+      locations: [neon, eastCorner, chop, ent, t1l, t1m],
+      edges: exactEdges,
+    });
+    expect(report.proposedByEdgeId["ent_t1l_fwd"]?.proposedMeters).toBe(1000);
+    expect(report.proposedByEdgeId["t1l_t1m_fwd"]?.proposedMeters).toBe(1500);
   });
 });

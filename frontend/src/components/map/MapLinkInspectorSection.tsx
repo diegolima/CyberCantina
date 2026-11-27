@@ -24,9 +24,10 @@ import type {
   LocationNode,
   MechanicsTopicId,
 } from "../../types";
-import type {
-  EdgeConsistencyDiagnostic,
-  ReconciliationAdjustment,
+import {
+  formatSuggestedDistanceLabel,
+  type EdgeConsistencyDiagnostic,
+  type ReconciliationAdjustment,
 } from "./spatialConsistency";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import {
@@ -656,7 +657,7 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
                     }}
                   >
                     <Check size={10} /> Apply{" "}
-                    {formatDistanceCompact(
+                    {formatSuggestedDistanceLabel(
                       reconciliationAdjustment?.proposedMeters ??
                         consistencyDiagnostic.suggestedMeters!
                     )}

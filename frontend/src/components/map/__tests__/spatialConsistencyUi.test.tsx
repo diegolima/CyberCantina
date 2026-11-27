@@ -129,6 +129,50 @@ describe("Spatial consistency UI components and helpers", () => {
     expect(html).toContain("Vertical Transition");
     expect(html).toContain("Apply 1.5km");
     expect(html).toContain("Mark Non-Euclidean");
+
+    const htmlPrecise = ReactDOMServer.renderToStaticMarkup(
+      <MapLinkInspectorSection
+        mode="editor"
+        allLocations={[t1l, t1m]}
+        allEdges={[primary, reciprocal]}
+        selectedEdgePair={{
+          pairKey: "t1l|t1m",
+          primary: { ...primary, distance_meters: 1000 },
+          reciprocal: { ...reciprocal, distance_meters: 1000 },
+        }}
+        onClose={() => {}}
+        consistencyDiagnostic={{
+          pairKey: "t1l|t1m",
+          primaryEdgeId: "e_f",
+          reciprocalEdgeId: "e_r",
+          fromLocationId: "t1l",
+          toLocationId: "t1m",
+          fromName: "Tunnel 1-L",
+          toName: "Tunnel 1-M",
+          kind: "distance_mismatch",
+          severity: "warning",
+          currentMeters: 1000,
+          suggestedMeters: 1118,
+          longitudinalErrorMeters: 118,
+          lateralErrorMeters: 0,
+          message: "Tunnel 1-L ↔ Tunnel 1-M is 1000m, but anchors/loop geometry imply ~1118m.",
+          scopeContainerId: "sewers",
+        }}
+        reconciliationAdjustment={{
+          edgeId: "e_f",
+          reciprocalEdgeId: "e_r",
+          fromLocationId: "t1l",
+          toLocationId: "t1m",
+          fromName: "Tunnel 1-L",
+          toName: "Tunnel 1-M",
+          currentMeters: 1000,
+          proposedMeters: 1118,
+          deltaMeters: 118,
+          scopeContainerId: "sewers",
+        }}
+      />
+    );
+    expect(htmlPrecise).toContain("Apply 1118m");
   });
 
   it("renders External Spatial Anchor picker only for containerized L0 locations in MapDetailsDrawer", () => {

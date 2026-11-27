@@ -10,13 +10,13 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import type {
-  ConsistencyReport,
-  EdgeConsistencyDiagnostic,
-  ReconciliationAdjustment,
-  WorldConsistencySummary,
+import {
+  formatSuggestedDistanceLabel,
+  type ConsistencyReport,
+  type EdgeConsistencyDiagnostic,
+  type ReconciliationAdjustment,
+  type WorldConsistencySummary,
 } from "./spatialConsistency";
-import { formatDistanceCompact } from "../../utils/spatialDistance";
 
 export interface MapConsistencyPanelProps {
   isOpen: boolean;
@@ -181,7 +181,8 @@ export const MapConsistencyPanel: React.FC<MapConsistencyPanelProps> = ({
                             className="btn btn-cyan map-consistency-mini-btn"
                             onClick={() => onApplySingleAdjustment(adj)}
                           >
-                            <Check size={10} /> Use {formatDistanceCompact(adj.proposedMeters)}
+                            <Check size={10} /> Use{" "}
+                            {formatSuggestedDistanceLabel(adj.proposedMeters)}
                           </button>
                         )}
                         {isEdgeDiag && !isMutatingLocked && (
