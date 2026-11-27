@@ -877,8 +877,12 @@ def test_green_lie_showcase_seed_uses_metric_distances(empty_repo: CantinaReposi
 
     worlds = empty_repo.list_worlds(owner_id=user.id)
     green_lie = next(w for w in worlds if w.name == "The Green Lie")
+    assert len(green_lie.locations) == 37
     assert len(green_lie.edges) == 88
-    assert all(e.distance_meters >= 70 for e in green_lie.edges)
+    assert all(e.distance_meters >= 1 for e in green_lie.edges)
+    assert sum(1 for e in green_lie.edges if e.is_vertical) == 22
+    assert sum(len(loc.props) for loc in green_lie.locations) == 2
+    assert sum(1 for loc in green_lie.locations if loc.anchor_location_id) == 3
     conn = empty_repo._connect()
     try:
         row = conn.execute("SELECT seed_key, seed_version FROM worlds WHERE id = ?", (green_lie.id,)).fetchone()

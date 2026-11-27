@@ -120,11 +120,48 @@ def test_per_user_showcase_seeding_and_full_field_validation(
     assert w["global_rules"]["describe_on_first_visit"] is True
     assert len(w["containers"]) == 13
     assert {ct["depth"] for ct in w["containers"]} == {1, 3, 4}
-    assert len(w["locations"]) == 35
+    assert len(w["locations"]) == 37
     assert len(w["edges"]) == 88
-    assert len(w["lore_nodes"]) == 14
+    assert len(w["lore_nodes"]) == 15
+    assert any(
+        ln["title"] == "Aegis Security Patrols" and ln["category"] == "threat"
+        for ln in w["lore_nodes"]
+    )
     assert len(w["media"]) == 3
     assert all(m["is_public"] is True for m in w["media"])
+
+    # Verify modern spatial features preserved by seed.py: anchors, props, verticality, and rich link metadata
+    locs_by_name = {loc["name"]: loc for loc in w["locations"]}
+    assert locs_by_name["Tunnel 1-O"]["anchor_location_id"] == locs_by_name["Drowned Reliquary"]["id"]
+    assert locs_by_name["Tunnel 2-O"]["anchor_location_id"] == locs_by_name["The Pillory"]["id"]
+    assert locs_by_name["Tunnel 3-L"]["anchor_location_id"] == locs_by_name["The Mid-Web"]["id"]
+    assert locs_by_name["Tunnel 1-N"]["is_entry_exit"] is False
+
+    reliquary_props = locs_by_name["Drowned Reliquary"]["props"]
+    assert len(reliquary_props) == 1
+    assert reliquary_props[0]["name"] == "Encrypted Ghost Signal Data Slate"
+    assert reliquary_props[0]["is_hidden"] is True
+
+    cage_props = locs_by_name["The Cage-Walk"]["props"]
+    assert len(cage_props) == 1
+    assert cage_props[0]["name"] == "Old Pistol"
+    assert cage_props[0]["is_hidden"] is False
+
+    vertical_edges = [e for e in w["edges"] if e.get("is_vertical")]
+    assert len(vertical_edges) == 22
+    edge_by_names = {
+        (
+            next(l["name"] for l in w["locations"] if l["id"] == e["from_location_id"]),
+            next(l["name"] for l in w["locations"] if l["id"] == e["to_location_id"]),
+        ): e
+        for e in w["edges"]
+    }
+    assert edge_by_names[("The Oculus Concourse", "Aetheris Terminal")]["travel_mode"] == "Maglev"
+    assert edge_by_names[("The Oculus Concourse", "Aetheris Terminal")]["speed_modifier"] == pytest.approx(25.0)
+    assert edge_by_names[("The Iron Yard", "Terminus Plaza")]["is_secret"] is True
+    assert edge_by_names[("Tunnel 2-L", "Tunnel 3-L")]["obstacles"] == ["false wall"]
+    assert edge_by_names[("Tunnel 4-M", "The Sluice")]["is_blocked"] is True
+    assert edge_by_names[("Tunnel 4-M", "The Sluice")]["obstacles"] == ["Sealed Doors"]
 
     main_floor = next(loc for loc in w["locations"] if loc["name"] == "Main Floor")
     assert main_floor["is_starting_location"] is True

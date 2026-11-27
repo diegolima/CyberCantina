@@ -417,11 +417,14 @@ async def test_showcase_zcc_roundtrip_into_playable_campaign(
     imp_world = next(w for w in worlds_b if "(Imported)" in w["name"])
     imp_char = next(c for c in chars_b if "(Imported)" in c["name"])
 
-    assert len(imp_world["locations"]) == 35
+    assert len(imp_world["locations"]) == 37
     assert len(imp_world["edges"]) == 88
     assert len(imp_world["containers"]) == 13
-    assert len(imp_world["lore_nodes"]) == 14
+    assert len(imp_world["lore_nodes"]) == 15
     assert len(imp_world["media"]) == 3
+    assert sum(len(loc.get("props") or []) for loc in imp_world["locations"]) == 2
+    assert sum(1 for loc in imp_world["locations"] if loc.get("anchor_location_id")) == 3
+    assert sum(1 for edge in imp_world["edges"] if edge.get("is_vertical")) == 22
     assert "low_token_initial_message" in imp_char["unsupported_fields"]
     assert imp_char["world_id"] == imp_world["id"]
 

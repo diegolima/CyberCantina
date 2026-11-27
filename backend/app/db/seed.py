@@ -24,7 +24,9 @@ from app.schemas.character import (
     VoiceAnchor,
 )
 from app.schemas.world import (
+    LocationProp,
     WorldGlobalRules,
+    extract_edge_consistency_fields,
     extract_edge_distance_meters,
     extract_edge_link_fields,
     remap_ghost_coords_dict,
@@ -632,14 +634,23 @@ def _seed_green_lie_world_for_user(
                 if loc.get("image_media_id")
                 else None
             )
+            raw_anchor_id = str(loc.get("anchor_location_id") or "").strip()
+            anchor_id = (
+                id_remap.get(raw_anchor_id)
+                if (raw_anchor_id and cont_id is not None)
+                else None
+            )
+            if anchor_id == new_loc_id:
+                anchor_id = None
             conn.execute(
                 """
                 INSERT INTO location_nodes (
                     id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
                     is_entry_exit, name, summary, description, environmental_tags_json,
-                    is_starting_location, is_hub, starting_message, ui_x, ui_y, icon, image_media_id
+                    is_starting_location, is_hub, starting_message, ui_x, ui_y, icon,
+                    anchor_location_id, image_media_id
                 )
-                VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     new_loc_id,
@@ -656,6 +667,7 @@ def _seed_green_lie_world_for_user(
                     loc.get("ui_x"),
                     loc.get("ui_y"),
                     loc.get("icon"),
+                    anchor_id,
                     img_id,
                 ),
             )
@@ -742,6 +754,44 @@ def _seed_green_lie_world_for_user(
                 conn=conn,
             )
 
+        # Location-scoped tracked props (inserted after world lore_nodes so artifact lore_id remaps cleanly)
+        for loc in w_data.get("locations", []):
+            new_loc_id = id_remap.get(str(loc["id"]))
+            if not new_loc_id:
+                continue
+            for p_idx, raw_prop in enumerate(loc.get("props") or []):
+                prop_copy = dict(raw_prop)
+                orig_prop_lore = prop_copy.get("lore_id")
+                if orig_prop_lore:
+                    resolved_prop_lore = id_remap.get(str(orig_prop_lore))
+                    prop_copy["lore_id"] = resolved_prop_lore
+                    if not resolved_prop_lore:
+                        prop_copy["flags"] = [
+                            f for f in (prop_copy.get("flags") or []) if f != "artifact"
+                        ]
+                prop_copy["id"] = f"prop_{uuid.uuid4().hex[:10]}"
+                validated_prop = LocationProp.model_validate(prop_copy)
+                conn.execute(
+                    """
+                    INSERT INTO location_props (
+                        id, world_id, location_id, campaign_id,
+                        name, note, flags_json, lore_id, is_hidden, sort_order
+                    )
+                    VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        validated_prop.id,
+                        new_world_id,
+                        new_loc_id,
+                        validated_prop.name,
+                        validated_prop.note,
+                        json.dumps(validated_prop.flags),
+                        validated_prop.lore_id,
+                        1 if validated_prop.is_hidden else 0,
+                        p_idx,
+                    ),
+                )
+
         # Edges
         for edge in w_data.get("edges", []):
             from_id = id_remap.get(str(edge["from_location_id"]))
@@ -752,15 +802,17 @@ def _seed_green_lie_world_for_user(
             speed_modifier, travel_mode, obstacles, is_blocked, is_secret = (
                 extract_edge_link_fields(edge)
             )
+            distance_mode, is_vertical = extract_edge_consistency_fields(edge)
             conn.execute(
                 """
                 INSERT INTO location_edges (
                     id, world_id, from_location_id, to_location_id,
                     direction_label, compass_direction, distance_meters,
                     speed_modifier, travel_mode, obstacles_json,
-                    is_blocked, is_secret, created_at_turn_id, superseded_at_turn_id
+                    is_blocked, is_secret, distance_mode, is_vertical,
+                    created_at_turn_id, superseded_at_turn_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     f"edge_{uuid.uuid4().hex[:10]}",
@@ -775,6 +827,8 @@ def _seed_green_lie_world_for_user(
                     json.dumps(obstacles),
                     1 if is_blocked else 0,
                     1 if is_secret else 0,
+                    distance_mode,
+                    1 if is_vertical else 0,
                 ),
             )
 
