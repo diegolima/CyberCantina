@@ -1459,6 +1459,7 @@ export function useTopologyMutations({
     (opts: {
       targetLocationId: string;
       distanceMeters: number;
+      sourceSlot?: CompassDirection;
       targetSlot?: CompassDirection;
     }) => {
       if (!emptyCanvasModal) return;
@@ -1467,7 +1468,7 @@ export function useTopologyMutations({
       initiateConnection({
         sourceKind: st.sourceKind,
         sourceId: st.sourceId,
-        sourceSlot: st.sourceSlot,
+        sourceSlot: opts.sourceSlot ?? st.sourceSlot,
         targetKind: "location",
         targetId: opts.targetLocationId,
         explicitTargetSlot: opts.targetSlot,

@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import { DoorOpen, X } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Compass, DoorOpen, X } from "lucide-react";
 import { useModalDialog } from "../../hooks/useModalDialog";
 import type {
   CompassDirection,
@@ -8,6 +8,10 @@ import type {
   LocationNode,
 } from "../../types";
 import { TargetEdgeSelector } from "./TargetEdgeSelector";
+import {
+  formatSuggestedDistanceLabel,
+  type ExistingLinkSuggestion,
+} from "./spatialConsistency";
 import {
   DEFAULT_EXTERIOR_DISTANCE_METERS,
   clampEdgeDistanceMeters,
@@ -25,6 +29,11 @@ export interface PortalPromotionModalProps {
   dynamicPortalIds: Set<string>;
   edges?: LocationEdge[];
   locationMap?: Map<string, LocationNode>;
+  onSuggestLinkGeometry?: (
+    fromLocId: string,
+    toLocId: string,
+    direction: CompassDirection
+  ) => ExistingLinkSuggestion | null;
   onChangePrompt: (next: PromotionPromptState | null) => void;
   onConfirm: (
     fromLoc: LocationNode,
@@ -43,6 +52,7 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
   dynamicPortalIds,
   edges = [],
   locationMap = new Map(),
+  onSuggestLinkGeometry,
   onChangePrompt,
   onConfirm,
 }) => {
@@ -63,6 +73,18 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
       );
     }
   }, [promptMeters]);
+
+  const suggestion = useMemo(
+    () =>
+      promotionPrompt
+        ? onSuggestLinkGeometry?.(
+            promotionPrompt.fromLocation.id,
+            promotionPrompt.toLocation.id,
+            promotionPrompt.direction
+          ) ?? null
+        : null,
+    [promotionPrompt, onSuggestLinkGeometry]
+  );
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
   useModalDialog({
@@ -183,10 +205,19 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                             promotionPrompt.targetLocationCandidates.find(
                               (r) => r.id === e.target.value
                             ) ?? promotionPrompt.toLocation;
+                          const sug =
+                            onSuggestLinkGeometry?.(
+                              promotionPrompt.fromLocation.id,
+                              picked.id,
+                              promotionPrompt.direction
+                            ) ?? null;
                           setPromotionPrompt({
                             ...promotionPrompt,
                             toLocation: picked,
                             chosenTargetLocationId: picked.id,
+                            distanceMeters: sug
+                              ? sug.distanceMeters
+                              : promotionPrompt.distanceMeters,
                             candidates: computePromotionCandidates(
                               promotionPrompt.fromLocation,
                               picked,
@@ -232,6 +263,58 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                     />
                   </div>
                 </div>
+
+                {suggestion && (
+                  <div
+                    data-testid="portal-link-geometry-banner"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      padding: "6px 9px",
+                      borderRadius: 6,
+                      border: "1px solid rgba(6, 182, 212, 0.4)",
+                      background: "rgba(6, 182, 212, 0.1)",
+                      fontSize: "0.71rem",
+                      color: "#cffafe",
+                    }}
+                  >
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <Compass size={12} color="#38bdf8" />
+                      <span>
+                        Map geometry implies{" "}
+                        <strong>
+                          ~{formatSuggestedDistanceLabel(suggestion.distanceMeters)}
+                        </strong>{" "}
+                        · <strong>{suggestion.sourceCompass}</strong> ↔{" "}
+                        <strong>{suggestion.targetCompass}</strong>
+                      </span>
+                    </span>
+                    {!suggestion.sourceWasOccupied &&
+                      (promotionPrompt.direction !== suggestion.resolvedSourceSlot ||
+                        resolvedMeters !== suggestion.distanceMeters) && (
+                        <button
+                          type="button"
+                          className="btn btn-cyan"
+                          style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+                          onClick={() =>
+                            setPromotionPrompt({
+                              ...promotionPrompt,
+                              direction: suggestion.resolvedSourceSlot,
+                              distanceMeters: suggestion.distanceMeters,
+                              explicitTargetSlot: undefined,
+                            })
+                          }
+                        >
+                          Apply {formatSuggestedDistanceLabel(suggestion.distanceMeters)} ·{" "}
+                          {suggestion.resolvedSourceSlot} ↔{" "}
+                          {suggestion.resolvedTargetSlot}
+                        </button>
+                      )}
+                  </div>
+                )}
 
                 <TargetEdgeSelector
                   sourceSlot={promotionPrompt.direction}

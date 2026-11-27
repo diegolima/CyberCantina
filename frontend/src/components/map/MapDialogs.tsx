@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Anchor,
   ArrowUpRight,
+  Compass,
   Eye,
   EyeOff,
   FolderPlus,
@@ -41,6 +42,7 @@ import {
   type MapIconOption,
 } from "./mapIcons";
 import {
+  COMPASS_ORDER,
   CONTAINER_DEPTH_LABELS,
   DEFAULT_EXTERIOR_DISTANCE_METERS,
   DEFAULT_FALLBACK_DISTANCE_METERS,
@@ -52,6 +54,10 @@ import {
   parseCommittedEdgeDistance,
   sanitizeEdgeDistanceInput,
 } from "./topologyProjection";
+import {
+  formatSuggestedDistanceLabel,
+  type ExistingLinkSuggestion,
+} from "./spatialConsistency";
 
 export interface PassageHubCollisionState {
   sourceNodeId: string;
@@ -255,7 +261,10 @@ export interface ExistingLinkTargetOption {
 
 export interface EmptyCanvasCreateModalProps {
   state: EmptyCanvasLinkState | null;
+  sourceContainerId?: string | null;
+  sourceOccupiedPorts?: Map<CompassDirection, string>;
   existingTargets?: ExistingLinkTargetOption[];
+  onSuggestExistingLink?: (targetLocationId: string) => ExistingLinkSuggestion | null;
   onCancel: () => void;
   onCreate: (opts: {
     kind: "location" | "hub" | "container";
@@ -266,13 +275,17 @@ export interface EmptyCanvasCreateModalProps {
   onLinkExisting?: (opts: {
     targetLocationId: string;
     distanceMeters: number;
+    sourceSlot?: CompassDirection;
     targetSlot?: CompassDirection;
   }) => void;
 }
 
 export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
   state,
+  sourceContainerId = null,
+  sourceOccupiedPorts = new Map(),
   existingTargets = [],
+  onSuggestExistingLink,
   onCancel,
   onCreate,
   onLinkExisting,
@@ -288,6 +301,9 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
   const [depth, setDepth] = useState<1 | 2 | 3 | 4>(1);
   const [existingQuery, setExistingQuery] = useState("");
   const [selectedExistingId, setSelectedExistingId] = useState<string>("");
+  const [activeSourceSlot, setActiveSourceSlot] = useState<CompassDirection>(
+    state?.sourceSlot ?? "N"
+  );
   const [targetSlot, setTargetSlot] = useState<CompassDirection | undefined>(undefined);
 
   useEffect(() => {
@@ -306,6 +322,7 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
       setDepth(state.availableDepths[0] ?? 1);
       setExistingQuery("");
       setSelectedExistingId("");
+      setActiveSourceSlot(state.sourceSlot);
       setTargetSlot(undefined);
     }
   }, [state]);
@@ -348,6 +365,14 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
       existingTargets.find((item) => item.location.id === selectedExistingId) ??
       null,
     [existingTargets, selectedExistingId]
+  );
+
+  const existingSuggestion = useMemo(
+    () =>
+      kind === "existing" && selectedExistingId
+        ? onSuggestExistingLink?.(selectedExistingId) ?? null
+        : null,
+    [kind, selectedExistingId, onSuggestExistingLink]
   );
 
   if (!state) return null;
@@ -413,7 +438,8 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
         >
           <span>
             {kind === "existing" ? "Link Existing" : "Create & Connect"} from &ldquo;
-            {state.sourceName}&rdquo; [{state.sourceSlot}]
+            {state.sourceName}&rdquo; [
+            {kind === "existing" ? activeSourceSlot : state.sourceSlot}]
           </span>
           <button
             type="button"
@@ -593,7 +619,21 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
                       disabled={item.alreadyLinked}
                       onClick={() => {
                         setSelectedExistingId(item.location.id);
+                        setDistanceDirty(false);
                         setTargetSlot(undefined);
+                        const sug = onSuggestExistingLink?.(item.location.id) ?? null;
+                        if (sug) {
+                          setDistanceDraft(String(sug.distanceMeters));
+                          setActiveSourceSlot(sug.resolvedSourceSlot);
+                        } else {
+                          const fallback =
+                            sourceContainerId &&
+                            item.location.container_id === sourceContainerId
+                              ? DEFAULT_INTERIOR_DISTANCE_METERS
+                              : DEFAULT_EXTERIOR_DISTANCE_METERS;
+                          setDistanceDraft(String(fallback));
+                          setActiveSourceSlot(state.sourceSlot);
+                        }
                       }}
                       style={{
                         display: "flex",
@@ -684,13 +724,179 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
             </div>
 
             {selectedExisting && (
-              <TargetEdgeSelector
-                sourceSlot={state.sourceSlot}
-                targetName={selectedExisting.location.name}
-                selectedSlot={targetSlot}
-                occupiedPorts={selectedExisting.occupiedPorts}
-                onChange={setTargetSlot}
-              />
+              <>
+                {existingSuggestion && (
+                  <div
+                    data-testid="existing-link-geometry-banner"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      padding: "6px 9px",
+                      borderRadius: 6,
+                      border: "1px solid rgba(6, 182, 212, 0.4)",
+                      background: "rgba(6, 182, 212, 0.1)",
+                      fontSize: "0.71rem",
+                      color: "#cffafe",
+                    }}
+                  >
+                    <span>
+                      Map geometry implies{" "}
+                      <strong>
+                        ~{formatSuggestedDistanceLabel(existingSuggestion.distanceMeters)}
+                      </strong>{" "}
+                      · <strong>{existingSuggestion.sourceCompass}</strong> ↔{" "}
+                      <strong>{existingSuggestion.targetCompass}</strong>
+                      {existingSuggestion.sourceWasOccupied
+                        ? ` (${existingSuggestion.sourceCompass} is occupied on ${state.sourceName}; using ${activeSourceSlot})`
+                        : ""}
+                    </span>
+                    <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                      {activeSourceSlot !== state.sourceSlot && (
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+                          onClick={() => {
+                            setActiveSourceSlot(state.sourceSlot);
+                            setTargetSlot(undefined);
+                          }}
+                        >
+                          Keep {state.sourceSlot}
+                        </button>
+                      )}
+                      {!existingSuggestion.sourceWasOccupied &&
+                        activeSourceSlot !== existingSuggestion.resolvedSourceSlot && (
+                          <button
+                            type="button"
+                            className="btn btn-cyan"
+                            style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+                            onClick={() => {
+                              setActiveSourceSlot(existingSuggestion.resolvedSourceSlot);
+                              setTargetSlot(undefined);
+                              if (!distanceDirty) {
+                                setDistanceDraft(
+                                  String(existingSuggestion.distanceMeters)
+                                );
+                              }
+                            }}
+                          >
+                            Use {existingSuggestion.resolvedSourceSlot} ↔{" "}
+                            {existingSuggestion.resolvedTargetSlot}
+                          </button>
+                        )}
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  className="field-group"
+                  style={{
+                    gap: 5,
+                    background: "rgba(15, 23, 42, 0.55)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: 6,
+                    padding: "8px 9px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 6,
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                        fontSize: "0.73rem",
+                        fontWeight: 600,
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      <Compass size={12} color="#38bdf8" />
+                      Source Edge on &ldquo;{state.sourceName}&rdquo;
+                    </span>
+                    {existingSuggestion && !existingSuggestion.sourceWasOccupied && (
+                      <span style={{ fontSize: "0.68rem", color: "#67e8f9" }}>
+                        Suggested: [{existingSuggestion.resolvedSourceSlot}]
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(8, minmax(0, 1fr))",
+                      gap: 4,
+                    }}
+                  >
+                    {COMPASS_ORDER.map((slot) => {
+                      const occupiedBy = sourceOccupiedPorts.get(slot);
+                      const isSelected = activeSourceSlot === slot;
+                      return (
+                        <button
+                          key={slot}
+                          type="button"
+                          className="btn"
+                          onClick={() => {
+                            setActiveSourceSlot(slot);
+                            setTargetSlot(undefined);
+                          }}
+                          aria-pressed={isSelected}
+                          title={
+                            occupiedBy
+                              ? `${slot} — occupied by ${occupiedBy}`
+                              : `${slot} — available`
+                          }
+                          style={{
+                            justifyContent: "center",
+                            padding: "4px 2px",
+                            fontSize: "0.69rem",
+                            fontWeight: isSelected ? 700 : 500,
+                            borderColor: isSelected
+                              ? occupiedBy
+                                ? "#c084fc"
+                                : "#22d3ee"
+                              : occupiedBy
+                              ? "rgba(245, 158, 11, 0.35)"
+                              : "var(--border-subtle)",
+                            background: isSelected
+                              ? occupiedBy
+                                ? "rgba(168, 85, 247, 0.2)"
+                                : "rgba(6, 182, 212, 0.2)"
+                              : occupiedBy
+                              ? "rgba(245, 158, 11, 0.08)"
+                              : "var(--bg-panel)",
+                            color: isSelected
+                              ? occupiedBy
+                                ? "#e9d5ff"
+                                : "#67e8f9"
+                              : occupiedBy
+                              ? "#fbbf24"
+                              : "var(--text-secondary)",
+                          }}
+                        >
+                          {slot}
+                          {occupiedBy ? "•" : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <TargetEdgeSelector
+                  sourceSlot={activeSourceSlot}
+                  targetName={selectedExisting.location.name}
+                  selectedSlot={targetSlot}
+                  occupiedPorts={selectedExisting.occupiedPorts}
+                  onChange={setTargetSlot}
+                />
+              </>
             )}
           </>
         ) : (
@@ -770,6 +976,7 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
                 onLinkExisting({
                   targetLocationId: selectedExisting.location.id,
                   distanceMeters: parsedDistanceMeters,
+                  sourceSlot: activeSourceSlot,
                   targetSlot,
                 });
               }}

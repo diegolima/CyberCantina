@@ -14,6 +14,8 @@ import {
   formatDistanceCompact,
   inferCompassDirection,
   isEdgeRevealed,
+  pickCompassSlot,
+  resolveAutoTargetSlot,
   resolveRevealedEdgePairs,
 } from "./topologyProjection";
 
@@ -1861,23 +1863,23 @@ export function estimateImpliedEdgeDistance(params: {
       focusLocationIds: focusIds,
     });
     const directGeom = evaluateCtx(ctx);
-    if (directGeom && (!sourceCompass || matchesSourceCompass(directGeom))) {
+    if (directGeom && sourceCompass && matchesSourceCompass(directGeom)) {
       return directGeom;
     }
 
-    if (sourceCompass) {
-      const unexpandedCandidates = [
-        ctx.ownerChildByLocId.get(fromLocationId) ?? null,
-        ctx.ownerChildByLocId.get(toLocationId) ?? null,
-      ]
-        .filter((cid): cid is string => typeof cid === "string" && cid.length > 0)
-        .filter(
-          (cid, idx, arr) =>
-            arr.indexOf(cid) === idx &&
-            !ctx.expandedChildContainerIds.has(cid) &&
-            (ctx.portalsByChildContainer.get(cid)?.length ?? 0) >= 2
-        );
+    const unexpandedCandidates = [
+      ctx.ownerChildByLocId.get(fromLocationId) ?? null,
+      ctx.ownerChildByLocId.get(toLocationId) ?? null,
+    ]
+      .filter((cid): cid is string => typeof cid === "string" && cid.length > 0)
+      .filter(
+        (cid, idx, arr) =>
+          arr.indexOf(cid) === idx &&
+          !ctx.expandedChildContainerIds.has(cid) &&
+          (ctx.portalsByChildContainer.get(cid)?.length ?? 0) >= 2
+      );
 
+    if (sourceCompass) {
       for (const candCid of unexpandedCandidates) {
         const trialExpanded = new Set(ctx.expandedChildContainerIds);
         trialExpanded.add(candCid);
@@ -1893,6 +1895,30 @@ export function estimateImpliedEdgeDistance(params: {
         });
         const trialGeom = evaluateCtx(trialCtx);
         if (trialGeom && matchesSourceCompass(trialGeom)) {
+          return trialGeom;
+        }
+      }
+    } else if (directGeom) {
+      // When suggesting both distance & compass freely (no constrained sourceCompass),
+      // expand sprawling multi-portal child containers whose internal portal separation >= 400m.
+      for (const candCid of unexpandedCandidates) {
+        const trialExpanded = new Set(ctx.expandedChildContainerIds);
+        trialExpanded.add(candCid);
+        const trialCtx = solveScopeLayoutInternal({
+          scopeContainerId: targetScopeId,
+          containers,
+          locations,
+          visibleEdges,
+          excludedSubtreeContainerIds: new Set<string>(),
+          depth: 0,
+          focusLocationIds: focusIds,
+          explicitExpandedChildIds: trialExpanded,
+        });
+        const trialGeom = evaluateCtx(trialCtx);
+        if (
+          trialGeom &&
+          Math.hypot(trialGeom.dx - directGeom.dx, trialGeom.dy - directGeom.dy) >= 400
+        ) {
           return trialGeom;
         }
       }
@@ -1913,6 +1939,83 @@ export function estimateImpliedEdgeDistance(params: {
     return tryScope(lcaScope);
   }
   return null;
+}
+
+export interface ExistingLinkSuggestion {
+  distanceMeters: number;
+  sourceCompass: CompassDirection;
+  targetCompass: CompassDirection;
+  resolvedSourceSlot: CompassDirection;
+  sourceWasOccupied: boolean;
+  sourceChangedFromDragged: boolean;
+  resolvedTargetSlot: CompassDirection;
+  targetWasOccupied: boolean;
+  fromGeometry: true;
+}
+
+/**
+ * Compute implied metric distance and conflict-free attachment ports when linking two existing locations.
+ * Returns `null` when the two endpoints do not yet share a 2D coordinate frame or anchor scope.
+ */
+export function suggestExistingLinkGeometry(params: {
+  fromLocationId: string;
+  toLocationId: string;
+  draggedSourceSlot: CompassDirection;
+  sourceOccupiedPorts: ReadonlySet<CompassDirection>;
+  targetOccupiedPorts: ReadonlySet<CompassDirection>;
+  scopeContainerId: string | null;
+  containers: readonly LocationContainer[];
+  locations: readonly LocationNode[];
+  edges: readonly LocationEdge[];
+  options?: ConsistencyAnalysisOptions;
+}): ExistingLinkSuggestion | null {
+  const {
+    fromLocationId,
+    toLocationId,
+    draggedSourceSlot,
+    sourceOccupiedPorts,
+    targetOccupiedPorts,
+    scopeContainerId,
+    containers,
+    locations,
+    edges,
+    options,
+  } = params;
+
+  const implied = estimateImpliedEdgeDistance({
+    fromLocationId,
+    toLocationId,
+    scopeContainerId,
+    containers,
+    locations,
+    edges,
+    options,
+  });
+  if (!implied) return null;
+
+  const srcOcc = new Set(sourceOccupiedPorts);
+  const tgtOcc = new Set(targetOccupiedPorts);
+  const sourceCompass = implied.compassDirection;
+  const targetCompass = OPPOSITE_COMPASS[sourceCompass];
+  const sourceWasOccupied = srcOcc.has(sourceCompass);
+  const resolvedSourceSlot = !sourceWasOccupied
+    ? sourceCompass
+    : !srcOcc.has(draggedSourceSlot)
+    ? draggedSourceSlot
+    : pickCompassSlot(sourceCompass, srcOcc);
+  const targetRes = resolveAutoTargetSlot(resolvedSourceSlot, tgtOcc);
+
+  return {
+    distanceMeters: implied.distanceMeters,
+    sourceCompass,
+    targetCompass,
+    resolvedSourceSlot,
+    sourceWasOccupied,
+    sourceChangedFromDragged: resolvedSourceSlot !== draggedSourceSlot,
+    resolvedTargetSlot: targetRes.slot,
+    targetWasOccupied: targetRes.isFallback || targetRes.collides,
+    fromGeometry: true,
+  };
 }
 
 /**

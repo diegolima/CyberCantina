@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { LocationContainer, LocationEdge, LocationNode } from "../../../types";
 import { MapConsistencyPanel } from "../MapConsistencyPanel";
 import { MapDetailsDrawer } from "../MapDetailsDrawer";
+import { EmptyCanvasCreateModal } from "../MapDialogs";
 import { MapLinkInspectorSection } from "../MapLinkInspectorSection";
+import { PortalPromotionModal } from "../PortalPromotionModal";
 import { analyzeSpatialConsistency } from "../spatialConsistency";
 import {
   applyAdjustmentsToEdges,
@@ -407,5 +409,84 @@ describe("Spatial consistency UI components and helpers", () => {
     expect(adjusted.find((e) => e.id === "e2")?.distance_meters).toBe(1000);
     // Keep vi referenced to satisfy unused-import lint if needed
     expect(typeof vi.fn).toBe("function");
+  });
+
+  it("renders geometry suggestion banner in PortalPromotionModal and EmptyCanvasCreateModal", () => {
+    const t2n = mkLoc("t2n", "Tunnel 2-N", "sewers");
+    const pillory = mkLoc("pillory", "The Pillory", null);
+    const suggestion = {
+      distanceMeters: 1680,
+      sourceCompass: "NE" as const,
+      targetCompass: "SW" as const,
+      resolvedSourceSlot: "NE" as const,
+      sourceWasOccupied: false,
+      sourceChangedFromDragged: true,
+      resolvedTargetSlot: "SW" as const,
+      targetWasOccupied: false,
+      fromGeometry: true as const,
+    };
+
+    const promoHtml = ReactDOMServer.renderToStaticMarkup(
+      <PortalPromotionModal
+        promotionPrompt={{
+          fromLocation: t2n,
+          toLocation: pillory,
+          targetContainerForLocationPick: null,
+          targetLocationCandidates: [],
+          chosenTargetLocationId: pillory.id,
+          direction: "SE",
+          distanceMeters: 100,
+          bidirectional: true,
+          candidates: [],
+        }}
+        containerMap={new Map()}
+        dynamicPortalIds={new Set()}
+        edges={[]}
+        locationMap={new Map([
+          [t2n.id, t2n],
+          [pillory.id, pillory],
+        ])}
+        onSuggestLinkGeometry={() => suggestion}
+        onChangePrompt={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+    expect(promoHtml).toContain('data-testid="portal-link-geometry-banner"');
+    expect(promoHtml).toContain("1680m");
+    expect(promoHtml).toContain("NE ↔ SW");
+    expect(promoHtml).toContain("Apply 1680m · NE ↔ SW");
+
+    const emptyModalHtml = ReactDOMServer.renderToStaticMarkup(
+      <EmptyCanvasCreateModal
+        state={{
+          sourceKind: "location",
+          sourceId: t2n.id,
+          sourceName: t2n.name,
+          sourceSlot: "SE",
+          dropX: 120,
+          dropY: 80,
+          canCreateContainer: true,
+          availableDepths: [1],
+          defaultDistanceMeters: 20,
+        }}
+        sourceContainerId="sewers"
+        sourceOccupiedPorts={new Map([["NW", "Tunnel 2-M"]])}
+        existingTargets={[
+          {
+            location: pillory,
+            breadcrumb: "Sector 9",
+            alreadyLinked: false,
+            occupiedPorts: new Map(),
+            isPortal: false,
+          },
+        ]}
+        onSuggestExistingLink={() => suggestion}
+        onCancel={() => {}}
+        onCreate={() => {}}
+        onLinkExisting={() => {}}
+      />
+    );
+    expect(emptyModalHtml).toContain("Create &amp; Connect");
+    expect(emptyModalHtml).toContain("Existing");
   });
 });

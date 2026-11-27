@@ -7,6 +7,7 @@ import {
   estimateImpliedEdgeDistance,
   formatSuggestedDistanceLabel,
   isValidSpatialAnchor,
+  suggestExistingLinkGeometry,
 } from "../spatialConsistency";
 import { resolveDefaultNewEdgeDistance } from "../useTopologyMutations";
 
@@ -633,5 +634,83 @@ describe("spatialConsistency", () => {
       edges,
     });
     expect(report.diagnostics).toHaveLength(0);
+  });
+
+  it("suggests geometry-implied distance and source/target ports for Tunnel 2-N -> The Pillory", () => {
+    const containers = [
+      mkCont("sector9", "Sector 9: The Drain", 3, null),
+      mkCont("neon_rust", "The Neon Rust", 1, "sector9"),
+      mkCont("sewers", "Sewers", 1, "sector9"),
+    ];
+    const locations = [
+      mkLoc("main_floor", "Main Floor", "neon_rust", { is_starting_location: true }),
+      mkLoc("chop_cath", "The Chop-Cathedral", "sector9"),
+      mkLoc("ticker", "The Ticker", "sector9"),
+      mkLoc("pillory", "The Pillory", "sector9"),
+      mkLoc("t1m", "Tunnel 1-M", "sewers"),
+      mkLoc("t2m", "Tunnel 2-M", "sewers"),
+      mkLoc("t2n", "Tunnel 2-N", "sewers"),
+      mkLoc("isolated", "Unlinked Cistern", "sewers"),
+    ];
+    const edges: LocationEdge[] = [
+      ...mkPair("nr_chop", "main_floor", "chop_cath", "E", 500),
+      ...mkPair("chop_ticker", "chop_cath", "ticker", "E", 1000),
+      ...mkPair("ticker_pillory", "ticker", "pillory", "NE", 2000),
+      ...mkPair("chop_t1m", "chop_cath", "t1m", "N", 1000),
+      ...mkPair("t1m_t2m", "t1m", "t2m", "N", 500),
+      ...mkPair("t2m_t2n", "t2m", "t2n", "SE", 2100),
+    ];
+
+    const freeSug = suggestExistingLinkGeometry({
+      fromLocationId: "t2n",
+      toLocationId: "pillory",
+      draggedSourceSlot: "SE",
+      sourceOccupiedPorts: new Set(["NW"]),
+      targetOccupiedPorts: new Set(["SW"]),
+      scopeContainerId: "sewers",
+      containers,
+      locations,
+      edges,
+    });
+    expect(freeSug).not.toBeNull();
+    expect(freeSug?.distanceMeters).toBe(1680);
+    expect(freeSug?.sourceCompass).toBe("NE");
+    expect(freeSug?.targetCompass).toBe("SW");
+    expect(freeSug?.resolvedSourceSlot).toBe("NE");
+    expect(freeSug?.sourceWasOccupied).toBe(false);
+    expect(freeSug?.sourceChangedFromDragged).toBe(true);
+    // SW on The Pillory is occupied by Ticker, so TargetEdgeSelector fallback picks adjacent free slot (W or S)
+    expect(freeSug?.targetWasOccupied).toBe(true);
+
+    // When NE on Tunnel 2-N is already occupied, keep dragged slot SE and mark sourceWasOccupied
+    const occupiedSug = suggestExistingLinkGeometry({
+      fromLocationId: "t2n",
+      toLocationId: "pillory",
+      draggedSourceSlot: "SE",
+      sourceOccupiedPorts: new Set(["NW", "NE"]),
+      targetOccupiedPorts: new Set(),
+      scopeContainerId: "sewers",
+      containers,
+      locations,
+      edges,
+    });
+    expect(occupiedSug?.sourceWasOccupied).toBe(true);
+    expect(occupiedSug?.resolvedSourceSlot).toBe("SE");
+    expect(occupiedSug?.resolvedTargetSlot).toBe("NW");
+
+    // Unlinked / disconnected node returns null cleanly
+    expect(
+      suggestExistingLinkGeometry({
+        fromLocationId: "t2n",
+        toLocationId: "isolated",
+        draggedSourceSlot: "E",
+        sourceOccupiedPorts: new Set(),
+        targetOccupiedPorts: new Set(),
+        scopeContainerId: "sewers",
+        containers,
+        locations,
+        edges,
+      })
+    ).toBeNull();
   });
 });

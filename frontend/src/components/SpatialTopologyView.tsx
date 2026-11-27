@@ -61,6 +61,7 @@ import { MapConsistencyPanel } from "./map/MapConsistencyPanel";
 import {
   analyzeSpatialConsistency,
   analyzeWorldConsistencySummary,
+  suggestExistingLinkGeometry,
   type EdgeConsistencyDiagnostic,
   type ReconciliationAdjustment,
 } from "./map/spatialConsistency";
@@ -1270,9 +1271,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     [currentContainerId, effectiveMutatingLocked, containerMap, patchContainer]
   );
 
-  const emptyCanvasExistingTargets = useMemo<ExistingLinkTargetOption[]>(() => {
-    if (!emptyCanvasModal) return [];
-    const sourceLoc = resolveNodeConnectionEndpoint({
+  const emptyCanvasSourceLoc = useMemo(() => {
+    if (!emptyCanvasModal) return null;
+    return resolveNodeConnectionEndpoint({
       kind: emptyCanvasModal.sourceKind,
       id: emptyCanvasModal.sourceId,
       locationMap,
@@ -1281,7 +1282,27 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       workingLocations,
       dynamicPortalIds: projectedTopology.dynamicPortalIds,
     }).loc;
-    if (!sourceLoc) return [];
+  }, [
+    emptyCanvasModal,
+    locationMap,
+    containerMap,
+    workingContainers,
+    workingLocations,
+    projectedTopology.dynamicPortalIds,
+  ]);
+
+  const emptyCanvasSourceOccupiedPorts = useMemo(() => {
+    if (!emptyCanvasSourceLoc) return new Map<CompassDirection, string>();
+    return getLocationOccupiedPorts(
+      emptyCanvasSourceLoc.id,
+      workingEdges,
+      locationMap
+    );
+  }, [emptyCanvasSourceLoc, workingEdges, locationMap]);
+
+  const emptyCanvasExistingTargets = useMemo<ExistingLinkTargetOption[]>(() => {
+    if (!emptyCanvasSourceLoc) return [];
+    const sourceLoc = emptyCanvasSourceLoc;
     return workingLocations
       .filter((loc) => loc.id !== sourceLoc.id)
       .map((loc) => {
@@ -1299,14 +1320,78 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         };
       });
   }, [
-    emptyCanvasModal,
+    emptyCanvasSourceLoc,
     locationMap,
-    containerMap,
     workingContainers,
     workingLocations,
     workingEdges,
     projectedTopology.dynamicPortalIds,
   ]);
+
+  const handleSuggestExistingLink = useCallback(
+    (targetLocationId: string) => {
+      if (!emptyCanvasModal || !emptyCanvasSourceLoc) return null;
+      const targetOccupied = getLocationOccupiedPorts(
+        targetLocationId,
+        workingEdges,
+        locationMap
+      );
+      return suggestExistingLinkGeometry({
+        fromLocationId: emptyCanvasSourceLoc.id,
+        toLocationId: targetLocationId,
+        draggedSourceSlot: emptyCanvasModal.sourceSlot,
+        sourceOccupiedPorts: new Set(emptyCanvasSourceOccupiedPorts.keys()),
+        targetOccupiedPorts: new Set(targetOccupied.keys()),
+        scopeContainerId: currentContainerId,
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: workingEdges,
+        options: { mode, unlockLore, revealedEdgeIds },
+      });
+    },
+    [
+      emptyCanvasModal,
+      emptyCanvasSourceLoc,
+      emptyCanvasSourceOccupiedPorts,
+      workingEdges,
+      locationMap,
+      currentContainerId,
+      workingContainers,
+      workingLocations,
+      mode,
+      unlockLore,
+      revealedEdgeIds,
+    ]
+  );
+
+  const handleSuggestPortalLinkGeometry = useCallback(
+    (fromLocId: string, toLocId: string, direction: CompassDirection) => {
+      const srcOcc = getLocationOccupiedPorts(fromLocId, workingEdges, locationMap);
+      const tgtOcc = getLocationOccupiedPorts(toLocId, workingEdges, locationMap);
+      return suggestExistingLinkGeometry({
+        fromLocationId: fromLocId,
+        toLocationId: toLocId,
+        draggedSourceSlot: direction,
+        sourceOccupiedPorts: new Set(srcOcc.keys()),
+        targetOccupiedPorts: new Set(tgtOcc.keys()),
+        scopeContainerId: currentContainerId,
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: workingEdges,
+        options: { mode, unlockLore, revealedEdgeIds },
+      });
+    },
+    [
+      workingEdges,
+      locationMap,
+      currentContainerId,
+      workingContainers,
+      workingLocations,
+      mode,
+      unlockLore,
+      revealedEdgeIds,
+    ]
+  );
 
   useTopologyPointerDrag({
     nodeDrag,
@@ -2227,7 +2312,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
           <EmptyCanvasCreateModal
             state={emptyCanvasModal}
+            sourceContainerId={emptyCanvasSourceLoc?.container_id ?? null}
+            sourceOccupiedPorts={emptyCanvasSourceOccupiedPorts}
             existingTargets={emptyCanvasExistingTargets}
+            onSuggestExistingLink={handleSuggestExistingLink}
             onCancel={() => setEmptyCanvasModal(null)}
             onCreate={handleConfirmEmptyCanvasCreate}
             onLinkExisting={handleLinkExistingFromEmptyCanvas}
@@ -2251,6 +2339,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             dynamicPortalIds={projectedTopology.dynamicPortalIds}
             edges={workingEdges}
             locationMap={locationMap}
+            onSuggestLinkGeometry={handleSuggestPortalLinkGeometry}
             onChangePrompt={setPromotionPrompt}
             onConfirm={handleConfirmPortalPrompt}
           />
