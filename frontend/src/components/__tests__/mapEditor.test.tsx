@@ -2688,4 +2688,204 @@ describe("Interactive Map Editor & Mini-Map", () => {
       pushUndo: true,
     });
   });
+
+  it("hides consistency warnings and anchor badges in campaign player mode and restores them when GM mode is enabled", () => {
+    const containers: LocationContainer[] = [
+      {
+        id: "cont_sewers",
+        world_id: "w1",
+        parent_container_id: null,
+        depth: 1,
+        name: "Sewers",
+        description: "",
+        environmental_tags: [],
+      },
+    ];
+    const locations: LocationNode[] = [
+      {
+        id: "loc_mid",
+        world_id: "w1",
+        container_id: null,
+        name: "The Mid-Web",
+        summary: "",
+        description: "",
+        environmental_tags: [],
+        is_starting_location: true,
+      },
+      {
+        id: "loc_pillory",
+        world_id: "w1",
+        container_id: null,
+        name: "The Pillory",
+        summary: "",
+        description: "",
+        environmental_tags: [],
+        is_starting_location: false,
+      },
+      {
+        id: "loc_t3l",
+        world_id: "w1",
+        container_id: "cont_sewers",
+        name: "Tunnel 3-L",
+        summary: "",
+        description: "",
+        environmental_tags: [],
+        is_starting_location: false,
+        anchor_location_id: "loc_mid",
+      },
+      {
+        id: "loc_t2o",
+        world_id: "w1",
+        container_id: "cont_sewers",
+        name: "Tunnel 2-O",
+        summary: "",
+        description: "",
+        environmental_tags: [],
+        is_starting_location: false,
+        anchor_location_id: "loc_pillory",
+      },
+    ];
+    // Simulate backend campaign player payload where secret edge loc_pillory <-> loc_t2o (500m N) is omitted
+    const playerVisibleEdges: LocationEdge[] = [
+      {
+        id: "e_outer_f",
+        world_id: "w1",
+        from_location_id: "loc_mid",
+        to_location_id: "loc_pillory",
+        direction_label: "E",
+        compass_direction: "E",
+        distance_meters: 501,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
+      },
+      {
+        id: "e_outer_r",
+        world_id: "w1",
+        from_location_id: "loc_pillory",
+        to_location_id: "loc_mid",
+        direction_label: "W",
+        compass_direction: "W",
+        distance_meters: 501,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
+      },
+      {
+        id: "e_entry_f",
+        world_id: "w1",
+        from_location_id: "loc_mid",
+        to_location_id: "loc_t3l",
+        direction_label: "E",
+        compass_direction: "E",
+        distance_meters: 1,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
+      },
+      {
+        id: "e_entry_r",
+        world_id: "w1",
+        from_location_id: "loc_t3l",
+        to_location_id: "loc_mid",
+        direction_label: "W",
+        compass_direction: "W",
+        distance_meters: 1,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
+      },
+      {
+        id: "e_tun_f",
+        world_id: "w1",
+        from_location_id: "loc_t3l",
+        to_location_id: "loc_t2o",
+        direction_label: "NE",
+        compass_direction: "NE",
+        distance_meters: 707,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
+      },
+      {
+        id: "e_tun_r",
+        world_id: "w1",
+        from_location_id: "loc_t2o",
+        to_location_id: "loc_t3l",
+        direction_label: "SW",
+        compass_direction: "SW",
+        distance_meters: 707,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
+      },
+    ];
+    const gmAllEdges: LocationEdge[] = [
+      ...playerVisibleEdges,
+      {
+        id: "e_sec_f",
+        world_id: "w1",
+        from_location_id: "loc_pillory",
+        to_location_id: "loc_t2o",
+        direction_label: "N",
+        compass_direction: "N",
+        distance_meters: 500,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: true,
+      },
+      {
+        id: "e_sec_r",
+        world_id: "w1",
+        from_location_id: "loc_t2o",
+        to_location_id: "loc_pillory",
+        direction_label: "S",
+        compass_direction: "S",
+        distance_meters: 500,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: true,
+      },
+    ];
+
+    const playerHtml = renderToStaticMarkup(
+      <SpatialTopologyView
+        title="Campaign Player Map"
+        containers={containers}
+        locations={locations}
+        edges={playerVisibleEdges}
+        activeLocationId="loc_t3l"
+        mode="campaign"
+        unlockLore={false}
+      />
+    );
+    expect(playerHtml).not.toContain('data-testid="map-consistency-btn"');
+    expect(playerHtml).not.toContain("map-consistency-btn--warn");
+    expect(playerHtml).not.toContain("map-consistency-btn--error");
+    expect(playerHtml).not.toContain("Anchored to external spatial reference");
+
+    const gmHtml = renderToStaticMarkup(
+      <SpatialTopologyView
+        title="Campaign GM Map"
+        containers={containers}
+        locations={locations}
+        edges={gmAllEdges}
+        activeLocationId="loc_t3l"
+        mode="campaign"
+        unlockLore={true}
+      />
+    );
+    expect(gmHtml).toContain('data-testid="map-consistency-btn"');
+    expect(gmHtml).not.toContain("map-consistency-btn--warn");
+    expect(gmHtml).not.toContain("map-consistency-btn--error");
+    expect(gmHtml).toContain("Anchored to external spatial reference");
+  });
 });

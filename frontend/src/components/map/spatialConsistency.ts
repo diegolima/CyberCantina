@@ -406,6 +406,46 @@ function getVisibleEdges(
   return [...edges];
 }
 
+/**
+ * Identify anchored locations whose anchor link is currently hidden (an unrevealed secret edge
+ * with no visible connecting edge). Those anchors must not be treated as 0m reference-only pins.
+ */
+function getSecretHiddenAnchorLocationIds(
+  locations: readonly LocationNode[],
+  allEdges: readonly LocationEdge[],
+  visibleEdges: readonly LocationEdge[],
+  options?: ConsistencyAnalysisOptions
+): Set<string> {
+  const skipped = new Set<string>();
+  if (options?.mode !== "campaign" || options?.unlockLore) {
+    return skipped;
+  }
+  const visibleEdgeIds = new Set(visibleEdges.map((e) => e.id));
+  for (const loc of locations) {
+    const anchorId = loc.anchor_location_id;
+    if (!anchorId) continue;
+    let hasVisibleConnecting = false;
+    let hasHiddenSecretConnecting = false;
+    for (const e of allEdges) {
+      const connects =
+        (e.from_location_id === loc.id && e.to_location_id === anchorId) ||
+        (e.from_location_id === anchorId && e.to_location_id === loc.id);
+      if (!connects) continue;
+      if (visibleEdgeIds.has(e.id)) {
+        hasVisibleConnecting = true;
+        break;
+      }
+      if (e.is_secret) {
+        hasHiddenSecretConnecting = true;
+      }
+    }
+    if (hasHiddenSecretConnecting && !hasVisibleConnecting) {
+      skipped.add(loc.id);
+    }
+  }
+  return skipped;
+}
+
 interface VirtualPortalOffset {
   u: string;
   v: string;
@@ -1107,6 +1147,7 @@ function solveSingleScopePass(params: {
   expandedChildContainerIds: Set<string>;
   focusLocationIds?: Set<string>;
   skipAnchors?: boolean;
+  skippedAnchorLocationIds?: Set<string>;
 }): ScopedSolverContext {
   const {
     scopeContainerId,
@@ -1119,6 +1160,7 @@ function solveSingleScopePass(params: {
     expandedChildContainerIds,
     focusLocationIds,
     skipAnchors = false,
+    skippedAnchorLocationIds,
   } = params;
 
   const contById = new Map(containers.map((c) => [c.id, c]));
@@ -1188,6 +1230,7 @@ function solveSingleScopePass(params: {
       const mappedNodeId = mappedIdByLocationId.get(loc.id);
       if (!mappedNodeId) continue;
       if (!loc.anchor_location_id) continue;
+      if (skippedAnchorLocationIds?.has(loc.id)) continue;
 
       const check = isValidSpatialAnchor(loc, loc.anchor_location_id, containers, locations);
       const target = locById.get(loc.anchor_location_id);
@@ -1275,6 +1318,7 @@ function solveSingleScopePass(params: {
         visibleEdges,
         excludedSubtreeContainerIds: nextExcluded,
         depth: depth + 1,
+        skippedAnchorLocationIds,
       });
 
       const outerMappedTarget = outerCtx.mappedIdByLocationId.get(target.id);
@@ -1458,6 +1502,7 @@ function solveScopeLayoutInternal(params: {
   skipAnchors?: boolean;
   focusLocationIds?: Set<string>;
   explicitExpandedChildIds?: Set<string>;
+  skippedAnchorLocationIds?: Set<string>;
 }): ScopedSolverContext {
   const {
     scopeContainerId,
@@ -1470,6 +1515,7 @@ function solveScopeLayoutInternal(params: {
     skipAnchors = false,
     focusLocationIds,
     explicitExpandedChildIds,
+    skippedAnchorLocationIds,
   } = params;
 
   if (explicitExpandedChildIds !== undefined || depth >= MAX_RECURSIVE_DEPTH) {
@@ -1484,6 +1530,7 @@ function solveScopeLayoutInternal(params: {
       expandedChildContainerIds: explicitExpandedChildIds ?? new Set<string>(),
       focusLocationIds,
       skipAnchors,
+      skippedAnchorLocationIds,
     });
   }
 
@@ -1503,6 +1550,7 @@ function solveScopeLayoutInternal(params: {
   const anchoredChildren = new Set<string>();
   for (const loc of locations) {
     if (!loc.anchor_location_id) continue;
+    if (skippedAnchorLocationIds?.has(loc.id)) continue;
     const ownerChild = ownerChildByLocId.get(loc.id);
     if (!ownerChild) continue;
     if (isValidSpatialAnchor(loc, loc.anchor_location_id, containers, locations).valid) {
@@ -1535,6 +1583,7 @@ function solveScopeLayoutInternal(params: {
     expandedChildContainerIds: effectiveExpanded,
     focusLocationIds,
     skipAnchors,
+    skippedAnchorLocationIds,
   });
 
   for (const childId of ambiguousL1) {
@@ -1555,6 +1604,7 @@ function solveScopeLayoutInternal(params: {
       expandedChildContainerIds: trialExpanded,
       focusLocationIds,
       skipAnchors,
+      skippedAnchorLocationIds,
     });
     const nextIssues = countChildBoundaryIssues(trialCtx, childId);
     if (
@@ -1806,6 +1856,12 @@ export function estimateImpliedEdgeDistance(params: {
   if (!fromLoc || !toLoc) return null;
 
   const visibleEdges = getVisibleEdges(edges, options);
+  const skippedAnchorLocationIds = getSecretHiddenAnchorLocationIds(
+    locations,
+    edges,
+    visibleEdges,
+    options
+  );
   const focusIds = new Set([fromLocationId, toLocationId]);
 
   const evaluateCtx = (ctx: ScopedSolverContext): ImpliedEdgeGeometry | null => {
@@ -1861,6 +1917,7 @@ export function estimateImpliedEdgeDistance(params: {
       excludedSubtreeContainerIds: new Set<string>(),
       depth: 0,
       focusLocationIds: focusIds,
+      skippedAnchorLocationIds,
     });
     const directGeom = evaluateCtx(ctx);
     if (directGeom && sourceCompass && matchesSourceCompass(directGeom)) {
@@ -1892,6 +1949,7 @@ export function estimateImpliedEdgeDistance(params: {
           depth: 0,
           focusLocationIds: focusIds,
           explicitExpandedChildIds: trialExpanded,
+          skippedAnchorLocationIds,
         });
         const trialGeom = evaluateCtx(trialCtx);
         if (trialGeom && matchesSourceCompass(trialGeom)) {
@@ -2033,6 +2091,12 @@ export function analyzeSpatialConsistency(params: {
   const { scopeContainerId, containers, locations, edges, options } = params;
   const locById = new Map(locations.map((l) => [l.id, l]));
   const visibleEdges = getVisibleEdges(edges, options);
+  const skippedAnchorLocationIds = getSecretHiddenAnchorLocationIds(
+    locations,
+    edges,
+    visibleEdges,
+    options
+  );
   const changedSet = new Set(options?.changedEdgeIds ?? []);
 
   const ctx = solveScopeLayoutInternal({
@@ -2043,6 +2107,7 @@ export function analyzeSpatialConsistency(params: {
     excludedSubtreeContainerIds: new Set<string>(),
     depth: 0,
     changedEdgeIds: changedSet,
+    skippedAnchorLocationIds,
   });
 
   const diagnostics: EdgeConsistencyDiagnostic[] = [...ctx.anchorDiagnostics];

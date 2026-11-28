@@ -489,4 +489,64 @@ describe("Spatial consistency UI components and helpers", () => {
     expect(emptyModalHtml).toContain("Create &amp; Connect");
     expect(emptyModalHtml).toContain("Existing");
   });
+
+  it("hides External Spatial Anchor picker in campaign player mode and shows it when GM mode is enabled", () => {
+    const cSewers = mkCont("c_sewers", "Sewers");
+    const pillory = mkLoc("pillory", "The Pillory", null, {
+      is_starting_location: true,
+    });
+    const t2o = mkLoc("t2o", "Tunnel 2-O", cSewers.id, {
+      anchor_location_id: pillory.id,
+    });
+    const containers = [cSewers];
+    const allLocations = [pillory, t2o];
+
+    const playerHtml = ReactDOMServer.renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="campaign"
+        unlockLore={false}
+        selectedLocation={t2o}
+        selectedContainer={null}
+        containers={containers}
+        allLocations={allLocations}
+        allEdges={[]}
+        dynamicPortalIds={new Set()}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={{ 1: "L1", 2: "L2", 3: "L3", 4: "L4" }}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+        consistencyReport={null}
+      />
+    );
+    expect(playerHtml).not.toContain('data-testid="location-anchor-picker"');
+    expect(playerHtml).not.toContain("External Spatial Anchor");
+
+    const gmHtml = ReactDOMServer.renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="campaign"
+        unlockLore={true}
+        selectedLocation={t2o}
+        selectedContainer={null}
+        containers={containers}
+        allLocations={allLocations}
+        allEdges={[]}
+        dynamicPortalIds={new Set()}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={{ 1: "L1", 2: "L2", 3: "L3", 4: "L4" }}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+        consistencyReport={null}
+      />
+    );
+    expect(gmHtml).toContain('data-testid="location-anchor-picker"');
+    expect(gmHtml).toContain("External Spatial Anchor");
+  });
 });

@@ -713,4 +713,43 @@ describe("spatialConsistency", () => {
       })
     ).toBeNull();
   });
+
+  it("skips anchors whose connecting edge is an unrevealed secret in campaign player mode", () => {
+    const containers = [mkCont("sewers", "Sewers", 1)];
+    const midWeb = mkLoc("mid_web", "The Mid-Web", null, { is_starting_location: true });
+    const pillory = mkLoc("pillory", "The Pillory", null);
+    const t3l = mkLoc("t3l", "Tunnel 3-L", "sewers", { anchor_location_id: "mid_web" });
+    const t2o = mkLoc("t2o", "Tunnel 2-O", "sewers", { anchor_location_id: "pillory" });
+
+    // Outer: Mid-Web (0, 0) --E 1000m--> Pillory (1000, 0)
+    // Sewers: Mid-Web --E 1m--> T3L (1, 0), Pillory --N 500m (SECRET)--> T2O (1000, 500)
+    // T3L --NE 1118m--> T2O: dx=999, dy=500 -> euclid=1117m, angle 26.6 deg (within 25 deg of NE 45 deg)
+    const edges = [
+      ...mkPair("outer", "mid_web", "pillory", "E", 1000),
+      ...mkPair("entry", "mid_web", "t3l", "E", 1),
+      ...mkPair("secret_exit", "pillory", "t2o", "N", 500, { is_secret: true }),
+      ...mkPair("tunnel", "t3l", "t2o", "NE", 1117),
+    ];
+
+    const gmReport = analyzeSpatialConsistency({
+      scopeContainerId: "sewers",
+      containers,
+      locations: [midWeb, pillory, t3l, t2o],
+      edges,
+      options: { mode: "campaign", unlockLore: true, revealedEdgeIds: [] },
+    });
+    expect(gmReport.diagnostics).toHaveLength(0);
+    expect(gmReport.anchorResolutions["t2o"]?.offsetMetersY).toBeCloseTo(500, 1);
+
+    // Without skipping secret-linked anchors, t2o would collapse to (1000, 0) and flag false errors
+    const playerReport = analyzeSpatialConsistency({
+      scopeContainerId: "sewers",
+      containers,
+      locations: [midWeb, pillory, t3l, t2o],
+      edges,
+      options: { mode: "campaign", unlockLore: false, revealedEdgeIds: [] },
+    });
+    expect(playerReport.diagnostics).toHaveLength(0);
+    expect(playerReport.anchorResolutions["t2o"]).toBeUndefined();
+  });
 });

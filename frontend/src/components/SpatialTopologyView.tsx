@@ -336,10 +336,18 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     useState<ReconcilePreviewState | null>(null);
   const [isConsistencyPanelOpen, setIsConsistencyPanelOpen] = useState(false);
   const [autoSyncConsistency, setAutoSyncConsistency] = useState(false);
+  const canInspectConsistency = mode === "editor" || unlockLore;
   const canAutoLayout = (mode === "editor" || unlockLore) && !isMutatingLocked;
   const isPreviewingAutoLayout = autoLayoutPreview !== null;
   const effectiveMutatingLocked =
     isMutatingLocked || isPreviewingAutoLayout || Boolean(reconcilePreview);
+
+  useEffect(() => {
+    if (!canInspectConsistency) {
+      setIsConsistencyPanelOpen(false);
+      setReconcilePreview(null);
+    }
+  }, [canInspectConsistency]);
 
   const commitNextGraph = useCallback(
     (next: GraphSnapshot, pushUndo = true) => {
@@ -792,36 +800,64 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     reachabilityReport.unreachableIds.length > 0 ||
     containerValidationErrors.length > 0;
 
-  const consistencyReport = useMemo(
-    () =>
-      analyzeSpatialConsistency({
+  const consistencyReport = useMemo(() => {
+    if (!canInspectConsistency) {
+      return {
         scopeContainerId: currentContainerId,
-        containers: workingContainers,
-        locations: workingLocations,
-        edges: workingEdges,
-        options: { mode, unlockLore, revealedEdgeIds },
-      }),
-    [
-      currentContainerId,
-      workingContainers,
-      workingLocations,
-      workingEdges,
-      mode,
-      unlockLore,
-      revealedEdgeIds,
-    ]
-  );
+        diagnostics: [],
+        diagnosticsByEdgeId: {},
+        anchorResolutions: {},
+        proposedAdjustments: [],
+        proposedByEdgeId: {},
+        errorCount: 0,
+        warningCount: 0,
+        infoCount: 0,
+      };
+    }
+    return analyzeSpatialConsistency({
+      scopeContainerId: currentContainerId,
+      containers: workingContainers,
+      locations: workingLocations,
+      edges: workingEdges,
+      options: { mode, unlockLore, revealedEdgeIds },
+    });
+  }, [
+    canInspectConsistency,
+    currentContainerId,
+    workingContainers,
+    workingLocations,
+    workingEdges,
+    mode,
+    unlockLore,
+    revealedEdgeIds,
+  ]);
 
-  const worldConsistencySummary = useMemo(
-    () =>
-      analyzeWorldConsistencySummary({
-        containers: workingContainers,
-        locations: workingLocations,
-        edges: workingEdges,
-        options: { mode, unlockLore, revealedEdgeIds },
-      }),
-    [workingContainers, workingLocations, workingEdges, mode, unlockLore, revealedEdgeIds]
-  );
+  const worldConsistencySummary = useMemo(() => {
+    if (!canInspectConsistency) {
+      return {
+        totalErrors: 0,
+        totalWarnings: 0,
+        totalInfos: 0,
+        byScope: [],
+        allDiagnostics: [],
+        allProposedAdjustments: [],
+      };
+    }
+    return analyzeWorldConsistencySummary({
+      containers: workingContainers,
+      locations: workingLocations,
+      edges: workingEdges,
+      options: { mode, unlockLore, revealedEdgeIds },
+    });
+  }, [
+    canInspectConsistency,
+    workingContainers,
+    workingLocations,
+    workingEdges,
+    mode,
+    unlockLore,
+    revealedEdgeIds,
+  ]);
 
   const settledFullMapCoords = useMemo(() => {
     const pseudoNodes: LocationNode[] = [
@@ -1226,7 +1262,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       });
     },
     setPromotionPrompt,
-    autoSyncConsistency,
+    autoSyncConsistency: canInspectConsistency && autoSyncConsistency,
     unlockLore,
     revealedEdgeIds,
   });
@@ -1336,6 +1372,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         workingEdges,
         locationMap
       );
+      if (!canInspectConsistency) return null;
       return suggestExistingLinkGeometry({
         fromLocationId: emptyCanvasSourceLoc.id,
         toLocationId: targetLocationId,
@@ -1350,6 +1387,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       });
     },
     [
+      canInspectConsistency,
       emptyCanvasModal,
       emptyCanvasSourceLoc,
       emptyCanvasSourceOccupiedPorts,
@@ -1366,6 +1404,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   const handleSuggestPortalLinkGeometry = useCallback(
     (fromLocId: string, toLocId: string, direction: CompassDirection) => {
+      if (!canInspectConsistency) return null;
       const srcOcc = getLocationOccupiedPorts(fromLocId, workingEdges, locationMap);
       const tgtOcc = getLocationOccupiedPorts(toLocId, workingEdges, locationMap);
       return suggestExistingLinkGeometry({
@@ -1382,6 +1421,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       });
     },
     [
+      canInspectConsistency,
       workingEdges,
       locationMap,
       currentContainerId,
@@ -2032,31 +2072,39 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         isAutoLayoutPreviewing={isPreviewingAutoLayout}
         onPreviewAutoLayout={handleStartAutoLayoutPreview}
         consistencyIssueCount={
-          worldConsistencySummary.totalErrors +
-          worldConsistencySummary.totalWarnings +
-          worldConsistencySummary.totalInfos
+          canInspectConsistency
+            ? worldConsistencySummary.totalErrors +
+              worldConsistencySummary.totalWarnings +
+              worldConsistencySummary.totalInfos
+            : 0
         }
-        consistencyErrorCount={worldConsistencySummary.totalErrors}
-        isConsistencyPanelOpen={isConsistencyPanelOpen}
-        onToggleConsistencyPanel={() =>
-          setIsConsistencyPanelOpen((prev) => !prev)
+        consistencyErrorCount={
+          canInspectConsistency ? worldConsistencySummary.totalErrors : 0
+        }
+        isConsistencyPanelOpen={canInspectConsistency && isConsistencyPanelOpen}
+        onToggleConsistencyPanel={
+          canInspectConsistency
+            ? () => setIsConsistencyPanelOpen((prev) => !prev)
+            : undefined
         }
         consistencyPopover={
-          <MapConsistencyPanel
-            isOpen={isConsistencyPanelOpen}
-            currentContainerId={currentContainerId}
-            currentReport={consistencyReport}
-            worldSummary={worldConsistencySummary}
-            isMutatingLocked={effectiveMutatingLocked}
-            isPreviewingReconcile={Boolean(reconcilePreview)}
-            autoSyncEnabled={autoSyncConsistency}
-            onToggleAutoSync={setAutoSyncConsistency}
-            onStartReconcilePreview={handleStartReconcilePreview}
-            onApplySingleAdjustment={handleApplySingleAdjustment}
-            onMarkNonEuclidean={handleMarkNonEuclidean}
-            onJumpToDiagnostic={handleJumpToDiagnostic}
-            onClose={() => setIsConsistencyPanelOpen(false)}
-          />
+          canInspectConsistency ? (
+            <MapConsistencyPanel
+              isOpen={isConsistencyPanelOpen}
+              currentContainerId={currentContainerId}
+              currentReport={consistencyReport}
+              worldSummary={worldConsistencySummary}
+              isMutatingLocked={effectiveMutatingLocked}
+              isPreviewingReconcile={Boolean(reconcilePreview)}
+              autoSyncEnabled={autoSyncConsistency}
+              onToggleAutoSync={setAutoSyncConsistency}
+              onStartReconcilePreview={handleStartReconcilePreview}
+              onApplySingleAdjustment={handleApplySingleAdjustment}
+              onMarkNonEuclidean={handleMarkNonEuclidean}
+              onJumpToDiagnostic={handleJumpToDiagnostic}
+              onClose={() => setIsConsistencyPanelOpen(false)}
+            />
+          ) : null
         }
       />
 
@@ -2198,6 +2246,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onApplyAutoLayout={handleApplyAutoLayoutPreview}
             onResetAutoLayout={handleResetAutoLayoutPreview}
             consistencyReport={consistencyReport}
+            unlockLore={unlockLore}
             reconcilePreview={reconcilePreview}
             onApplyReconcilePreview={handleApplyReconcilePreview}
             onCancelReconcilePreview={handleCancelReconcilePreview}
@@ -2299,8 +2348,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onToggleEdgeSecret={handleToggleEdgeSecret}
             onDeleteEdge={handleDeleteEdge}
             onDeleteEdgeGroup={handleDeleteEdgeGroup}
-            onSetLocationAnchor={(locId, anchorId) =>
-              patchLocation(locId, { anchor_location_id: anchorId }, true)
+            onSetLocationAnchor={
+              canInspectConsistency
+                ? (locId, anchorId) =>
+                    patchLocation(locId, { anchor_location_id: anchorId }, true)
+                : undefined
             }
           />
 

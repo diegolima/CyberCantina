@@ -168,6 +168,7 @@ export interface SpatialTopologyCanvasProps {
   onApplyAutoLayout?: () => void;
   onResetAutoLayout?: () => void;
   consistencyReport?: ConsistencyReport | null;
+  unlockLore?: boolean;
   reconcilePreview?: {
     containerId: string | null;
     adjustments: ReconciliationAdjustment[];
@@ -240,6 +241,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   onApplyAutoLayout,
   onResetAutoLayout,
   consistencyReport = null,
+  unlockLore = false,
   reconcilePreview = null,
   onApplyReconcilePreview,
   onCancelReconcilePreview,
@@ -2201,8 +2203,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         </g>
                       )}
 
-                      {/* External Spatial Anchor Pin Badge */}
-                      {Boolean(loc.anchor_location_id) && (
+                      {/* External Spatial Anchor Pin Badge (World Editor & GM Mode only) */}
+                      {Boolean(loc.anchor_location_id) &&
+                        (mode === "editor" || unlockLore) && (
                         <g>
                           <title>Anchored to external spatial reference</title>
                           <circle

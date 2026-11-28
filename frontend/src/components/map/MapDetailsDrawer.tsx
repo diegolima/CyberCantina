@@ -2167,8 +2167,8 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         </div>
       )}
 
-      {/* External Spatial Anchor (for containerized Level 0 locations) */}
-      {selectedLocation.container_id && (() => {
+      {/* External Spatial Anchor (for containerized Level 0 locations in World Editor & GM Mode) */}
+      {selectedLocation.container_id && (mode === "editor" || unlockLore) && (() => {
         const candidates = getValidAnchorCandidates(
           selectedLocation,
           containers,
