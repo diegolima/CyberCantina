@@ -566,6 +566,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE worlds ADD COLUMN seed_modified INTEGER NOT NULL DEFAULT 0"
                 )
+            if "dismissed_seed_version" not in world_cols:
+                conn.execute(
+                    "ALTER TABLE worlds ADD COLUMN dismissed_seed_version INTEGER NULL"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_worlds_owner ON worlds(owner_id)"
             )
@@ -621,6 +625,10 @@ class SchemaInitMixin:
             if "seed_modified" not in char_cols:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN seed_modified INTEGER NOT NULL DEFAULT 0"
+                )
+            if "dismissed_seed_version" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN dismissed_seed_version INTEGER NULL"
                 )
             if "version" not in char_cols:
                 conn.execute(

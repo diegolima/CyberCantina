@@ -13,7 +13,7 @@ import { type DeleteTarget } from "./components/DeleteConfirmationModal";
 import { LiveInspector } from "./components/LiveInspector";
 import { HomeScreen } from "./components/HomeScreen";
 import { AppSidebar } from "./components/AppSidebar";
-import { AppModals } from "./components/AppModals";
+import { AppModals, type SeedUpdateTarget } from "./components/AppModals";
 import { NotesFlyout } from "./components/NotesDrawer";
 import {
   WorldInspectorModal,
@@ -109,6 +109,11 @@ const AppShell: React.FC = () => {
   const [inspectingWorld, setInspectingWorld] = useState<WorldRecord | null>(
     null
   );
+  const [seedUpdateTarget, setSeedUpdateTarget] =
+    useState<SeedUpdateTarget | null>(null);
+  const [seedUpdateBusy, setSeedUpdateBusy] = useState(false);
+  const [seedUpdateError, setSeedUpdateError] = useState<string | null>(null);
+  const [seedUpdateRevision, setSeedUpdateRevision] = useState(0);
   const [campaignWorldSheetTab, setCampaignWorldSheetTab] =
     useState<WorldTab | null>(null);
   const [codexFocusRequest, setCodexFocusRequest] =
@@ -217,6 +222,106 @@ const AppShell: React.FC = () => {
 
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleConfirmSeedUpdate = async (
+    mode: "replace" | "copy_and_update",
+    copyName?: string
+  ) => {
+    if (!seedUpdateTarget) return;
+    setSeedUpdateBusy(true);
+    setSeedUpdateError(null);
+    try {
+      if (seedUpdateTarget.kind === "world") {
+        const targetId = seedUpdateTarget.world.id;
+        const res = await api.updateSeededWorld(targetId, {
+          mode,
+          copy_name: copyName ?? null,
+        });
+        const [wList, cList] = await Promise.all([
+          api.listWorlds(),
+          api.listCharacters(),
+        ]);
+        setWorlds(wList);
+        setCharacters(cList);
+        const nextWorld =
+          wList.find((w) => w.id === res.updated_world.id) ?? res.updated_world;
+        if (inspectingWorld?.id === targetId) {
+          setInspectingWorld(nextWorld);
+          setSeedUpdateRevision((r) => r + 1);
+        }
+        if (activeWorld?.id === targetId) {
+          setActiveWorld(nextWorld);
+        }
+      } else {
+        const targetId = seedUpdateTarget.character.id;
+        const res = await api.updateSeededCharacter(targetId, {
+          mode,
+          copy_name: copyName ?? null,
+        });
+        const [wList, cList] = await Promise.all([
+          api.listWorlds(),
+          api.listCharacters(),
+        ]);
+        setWorlds(wList);
+        setCharacters(cList);
+        const nextChar =
+          cList.find((c) => c.id === res.updated_character.id) ??
+          res.updated_character;
+        if (inspectingCharacter?.id === targetId) {
+          setInspectingCharacter(nextChar);
+          setSeedUpdateRevision((r) => r + 1);
+        }
+        if (activeCharacter?.id === targetId) {
+          setActiveCharacter(nextChar);
+        }
+      }
+      setSeedUpdateTarget(null);
+    } catch (err: any) {
+      setSeedUpdateError(err?.message || "Failed to apply built-in update.");
+    } finally {
+      setSeedUpdateBusy(false);
+    }
+  };
+
+  const handleDismissSeedUpdate = async () => {
+    if (!seedUpdateTarget) return;
+    setSeedUpdateBusy(true);
+    setSeedUpdateError(null);
+    try {
+      if (seedUpdateTarget.kind === "world") {
+        const targetId = seedUpdateTarget.world.id;
+        const updated = await api.dismissWorldSeedUpdate(targetId);
+        const wList = await api.listWorlds();
+        setWorlds(wList);
+        const nextWorld = wList.find((w) => w.id === updated.id) ?? updated;
+        if (inspectingWorld?.id === targetId) {
+          setInspectingWorld(nextWorld);
+          setSeedUpdateRevision((r) => r + 1);
+        }
+        if (activeWorld?.id === targetId) {
+          setActiveWorld(nextWorld);
+        }
+      } else {
+        const targetId = seedUpdateTarget.character.id;
+        const updated = await api.dismissCharacterSeedUpdate(targetId);
+        const cList = await api.listCharacters();
+        setCharacters(cList);
+        const nextChar = cList.find((c) => c.id === updated.id) ?? updated;
+        if (inspectingCharacter?.id === targetId) {
+          setInspectingCharacter(nextChar);
+          setSeedUpdateRevision((r) => r + 1);
+        }
+        if (activeCharacter?.id === targetId) {
+          setActiveCharacter(nextChar);
+        }
+      }
+      setSeedUpdateTarget(null);
+    } catch (err: any) {
+      setSeedUpdateError(err?.message || "Failed to skip update.");
+    } finally {
+      setSeedUpdateBusy(false);
+    }
+  };
 
   const {
     isStreaming,
@@ -1147,6 +1252,14 @@ const AppShell: React.FC = () => {
           onDeleteCampaign={(camp) => handleRequestDeleteCampaign(undefined, camp)}
           onDeleteCharacter={(char) => handleRequestDeleteCharacter(undefined, char)}
           onDeleteWorld={(w) => handleRequestDeleteWorld(undefined, w)}
+          onUpdateCharacter={(char) => {
+            setSeedUpdateError(null);
+            setSeedUpdateTarget({ kind: "character", character: char });
+          }}
+          onUpdateWorld={(w) => {
+            setSeedUpdateError(null);
+            setSeedUpdateTarget({ kind: "world", world: w });
+          }}
           onDeletePersona={(p) => handleRequestDeletePersona(undefined, p)}
           onRefreshData={async () => {
             const [c, w, p, camp] = await Promise.all([
@@ -1422,6 +1535,13 @@ const AppShell: React.FC = () => {
         handleAccountDeleted={handleAccountDeleted}
         refreshAuthStatus={refreshAuthStatus}
         loadWorkspaceData={loadWorkspaceData}
+        seedUpdateTarget={seedUpdateTarget}
+        setSeedUpdateTarget={setSeedUpdateTarget}
+        seedUpdateBusy={seedUpdateBusy}
+        seedUpdateError={seedUpdateError}
+        seedUpdateRevision={seedUpdateRevision}
+        onConfirmSeedUpdate={handleConfirmSeedUpdate}
+        onDismissSeedUpdate={handleDismissSeedUpdate}
       />
 
       <NavigationGuardModal

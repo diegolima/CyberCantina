@@ -8,6 +8,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 import numpy as np
+from app.db.seed_catalog import compute_seed_update_info
 from app.db.vector_store import combine_entry_text, embed_text
 from app.schemas.character import (
     BaselinePsyche,
@@ -447,7 +448,40 @@ class CharactersMixin(CharacterVersionsMixin):
                 pending_deletion=bool(row["pending_deletion"]) if "pending_deletion" in row_keys else False,
                 created_at=row["created_at"],
             )
-            return self._hydrate_character_records_conn(conn, [rec])[0]
+            rec = self._hydrate_character_records_conn(conn, [rec])[0]
+            seed_key_val = row["seed_key"] if "seed_key" in row_keys else None
+            if campaign_id is None and valid_turn_ids is None and not rec.pending_deletion and seed_key_val:
+                usage_row = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT campaign_id) AS cnt
+                    FROM (
+                        SELECT campaign_id FROM campaign_characters WHERE character_id = ?
+                        UNION
+                        SELECT id AS campaign_id FROM campaigns WHERE character_id = ?
+                    )
+                    """,
+                    (character_id, character_id),
+                ).fetchone()
+                has_custom_media = any(
+                    bool(u) and not str(u).startswith("/api/media/public/")
+                    for u in rec.portraits.values()
+                ) or any(
+                    (bool(img.url) and not str(img.url).startswith("/api/media/public/"))
+                    or bool(img.video_url)
+                    for img in rec.gallery
+                )
+                rec.seed_update = compute_seed_update_info(
+                    seed_key=str(seed_key_val),
+                    entity_type="character",
+                    current_version=row["seed_version"] if "seed_version" in row_keys else None,
+                    seed_modified=row["seed_modified"] if "seed_modified" in row_keys else 0,
+                    dismissed_version=row["dismissed_seed_version"] if "dismissed_seed_version" in row_keys else None,
+                    has_custom_media=has_custom_media,
+                    active_campaigns_count=int(usage_row["cnt"]) if usage_row else 0,
+                )
+            else:
+                rec.seed_update = None
+            return rec
         finally:
             conn.close()
 

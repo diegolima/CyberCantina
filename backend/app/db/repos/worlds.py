@@ -7,6 +7,7 @@ import sqlite3
 import uuid
 from typing import Any
 import numpy as np
+from app.db.seed_catalog import compute_seed_update_info
 from app.db.vector_store import combine_entry_text
 from app.schemas.world import (
     MAX_EDGE_DISTANCE_METERS,
@@ -40,6 +41,130 @@ from app.db.repos.base import (
     _location_lore_vector_fields,
     utc_now_iso,
 )
+
+
+def _canonical_lore_tuples(lore_nodes: list[LoreNode]) -> list[tuple[Any, ...]]:
+    return [
+        (ln.id, ln.title, ln.category, ln.content, list(ln.entity_tags or []))
+        for ln in lore_nodes
+    ]
+
+
+def _world_payload_differs(
+    orig: WorldRecord,
+    payload: WorldUpdatePayload,
+    base_locations: list[LocationNode],
+    base_edges: list[LocationEdge],
+    effective_unsupported: dict[str, Any],
+) -> bool:
+    """Return True if persisted world fields differ between orig and payload."""
+    if orig.name != payload.name:
+        return True
+    if orig.global_rules.model_dump() != payload.global_rules.model_dump():
+        return True
+    if (orig.unsupported_fields or {}) != (effective_unsupported or {}):
+        return True
+    if _canonical_lore_tuples(orig.lore_nodes) != _canonical_lore_tuples(payload.lore_nodes):
+        return True
+
+    orig_conts = sorted(
+        (
+            (
+                c.id,
+                c.parent_container_id,
+                int(c.depth),
+                c.name,
+                c.description or "",
+                list(c.environmental_tags or []),
+                c.ui_x,
+                c.ui_y,
+                dict(c.ghost_coords or {}),
+                c.icon,
+                c.image_media_id,
+                _canonical_lore_tuples(c.lore_nodes),
+            )
+            for c in orig.containers
+        ),
+        key=lambda x: str(x[0]),
+    )
+    new_conts = sorted(
+        (
+            (
+                c.id,
+                c.parent_container_id,
+                int(c.depth),
+                c.name,
+                c.description or "",
+                list(c.environmental_tags or []),
+                c.ui_x,
+                c.ui_y,
+                dict(c.ghost_coords or {}),
+                c.icon,
+                c.image_media_id,
+                _canonical_lore_tuples(c.lore_nodes),
+            )
+            for c in payload.containers
+        ),
+        key=lambda x: str(x[0]),
+    )
+    if orig_conts != new_conts:
+        return True
+
+    def _loc_tuples(locs: list[LocationNode]) -> list[tuple[Any, ...]]:
+        return sorted(
+            (
+                (
+                    loc.id,
+                    loc.container_id,
+                    bool(loc.is_entry_exit),
+                    loc.name,
+                    loc.summary or "",
+                    loc.description or "",
+                    list(loc.environmental_tags or []),
+                    bool(loc.is_starting_location),
+                    bool(loc.is_hub),
+                    loc.starting_message or "",
+                    loc.ui_x,
+                    loc.ui_y,
+                    loc.icon,
+                    loc.image_media_id,
+                    loc.anchor_location_id,
+                    _canonical_lore_tuples(loc.lore_nodes),
+                    [
+                        (p.id, p.name, p.note or "", list(p.flags or []), p.lore_id, bool(p.is_hidden))
+                        for p in (loc.props or [])
+                    ],
+                )
+                for loc in locs
+            ),
+            key=lambda x: str(x[0]),
+        )
+
+    if _loc_tuples(orig.locations) != _loc_tuples(base_locations):
+        return True
+
+    def _edge_tuples(edges: list[LocationEdge]) -> list[tuple[Any, ...]]:
+        return sorted(
+            (
+                e.from_location_id,
+                e.to_location_id,
+                e.direction_label,
+                normalize_compass_direction(e.compass_direction),
+                max(1, min(MAX_EDGE_DISTANCE_METERS, int(e.distance_meters))),
+                normalize_edge_speed_modifier(e.speed_modifier),
+                normalize_edge_travel_mode(e.travel_mode),
+                normalize_edge_obstacles(e.obstacles),
+                bool(e.is_blocked),
+                bool(e.is_secret),
+                normalize_edge_distance_mode(getattr(e, "distance_mode", "flexible")),
+                normalize_edge_is_vertical(getattr(e, "is_vertical", False)),
+            )
+            for e in edges
+        )
+
+    if _edge_tuples(orig.edges) != _edge_tuples(base_edges):
+        return True
+    return False
 
 
 class WorldsMixin:
@@ -840,6 +965,40 @@ class WorldsMixin:
             media_by_id = {m.id: m for m in media_items}
             self._hydrate_entities_media(containers, media_by_id)
             self._hydrate_entities_media(locations, media_by_id)
+
+            w_keys = w_row.keys()
+            is_pending_del = bool(w_row["pending_deletion"]) if "pending_deletion" in w_keys else False
+            seed_key_val = w_row["seed_key"] if "seed_key" in w_keys else None
+            seed_update = None
+            if campaign_id is None and valid_turn_ids is None and not is_pending_del and seed_key_val:
+                camp_cnt_row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ?",
+                    (world_id,),
+                ).fetchone()
+                char_cnt_row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM characters WHERE world_id = ? AND pending_deletion = 0",
+                    (world_id,),
+                ).fetchone()
+                custom_media_row = conn.execute(
+                    """
+                    SELECT 1 FROM world_media_links wml
+                    JOIN media_assets ma ON ma.id = wml.media_id
+                    WHERE wml.world_id = ?
+                      AND (ma.is_public = 0 OR COALESCE(ma.seed_key, '') != ?)
+                    LIMIT 1
+                    """,
+                    (world_id, str(seed_key_val)),
+                ).fetchone()
+                seed_update = compute_seed_update_info(
+                    seed_key=str(seed_key_val),
+                    entity_type="world",
+                    current_version=w_row["seed_version"] if "seed_version" in w_keys else None,
+                    seed_modified=w_row["seed_modified"] if "seed_modified" in w_keys else 0,
+                    dismissed_version=w_row["dismissed_seed_version"] if "dismissed_seed_version" in w_keys else None,
+                    has_custom_media=custom_media_row is not None,
+                    active_campaigns_count=int(camp_cnt_row["cnt"]) if camp_cnt_row else 0,
+                    linked_characters_count=int(char_cnt_row["cnt"]) if char_cnt_row else 0,
+                )
         finally:
             conn.close()
 
@@ -861,7 +1020,6 @@ class WorldsMixin:
                 continue
             edges.append(self._row_to_edge(r))
 
-        w_keys = w_row.keys()
         raw_rules_dict = json.loads(w_row["global_rules_json"] or "{}")
         stored_unsupported = json.loads(
             w_row["unsupported_fields_json"]
@@ -878,7 +1036,7 @@ class WorldsMixin:
             id=w_row["id"],
             name=w_row["name"],
             global_rules=WorldGlobalRules.model_validate(raw_rules_dict),
-            pending_deletion=bool(w_row["pending_deletion"]) if "pending_deletion" in w_keys else False,
+            pending_deletion=is_pending_del,
             created_at=w_row["created_at"],
             containers=containers,
             locations=locations,
@@ -886,6 +1044,7 @@ class WorldsMixin:
             lore_nodes=lore_nodes,
             media=media_items,
             unsupported_fields=unsupported_fields,
+            seed_update=seed_update,
         )
 
     def update_world(
@@ -902,17 +1061,23 @@ class WorldsMixin:
         conn = self._connect()
         try:
             w_owner_row = conn.execute(
-                "SELECT owner_id, seed_key, seed_version, seed_modified FROM worlds WHERE id = ?",
+                "SELECT owner_id, seed_key, seed_version, seed_modified, dismissed_seed_version FROM worlds WHERE id = ?",
                 (world_id,),
             ).fetchone()
+            w_owner_keys = w_owner_row.keys() if w_owner_row else ()
             effective_owner_id = (
                 w_owner_row["owner_id"]
-                if w_owner_row and "owner_id" in w_owner_row.keys()
+                if w_owner_row and "owner_id" in w_owner_keys
                 else owner_id
             )
             seed_key = w_owner_row["seed_key"] if w_owner_row else None
             seed_version = w_owner_row["seed_version"] if w_owner_row else None
-            next_seed_modified = 1 if seed_key else (int(w_owner_row["seed_modified"] or 0) if w_owner_row else 0)
+            prev_seed_modified = int(w_owner_row["seed_modified"] or 0) if w_owner_row else 0
+            dismissed_seed_version = (
+                w_owner_row["dismissed_seed_version"]
+                if w_owner_row and "dismissed_seed_version" in w_owner_keys
+                else None
+            )
 
             usage_row = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ?",
@@ -953,6 +1118,18 @@ class WorldsMixin:
                 strict=True,
             )
             unsupported_json = json.dumps(effective_unsupported)
+            if not seed_key:
+                next_seed_modified = prev_seed_modified
+            elif prev_seed_modified:
+                next_seed_modified = 1
+            else:
+                next_seed_modified = (
+                    1
+                    if _world_payload_differs(
+                        orig, payload, base_locations, base_edges, effective_unsupported
+                    )
+                    else 0
+                )
 
             if reuse_ids:
                 # In-place update (zero active campaigns reference this world)
@@ -1001,9 +1178,10 @@ class WorldsMixin:
                     """
                     INSERT INTO worlds (
                         id, owner_id, name, global_rules_json, unsupported_fields_json,
-                        seed_key, seed_version, seed_modified, pending_deletion, created_at
+                        seed_key, seed_version, seed_modified, dismissed_seed_version,
+                        pending_deletion, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                     """,
                     (
                         target_world_id,
@@ -1014,6 +1192,7 @@ class WorldsMixin:
                         seed_key,
                         seed_version,
                         next_seed_modified,
+                        dismissed_seed_version,
                         now,
                     ),
                 )

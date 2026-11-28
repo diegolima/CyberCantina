@@ -198,17 +198,24 @@ class CharacterVersionsMixin:
         copied_media_for: str | None = None
         try:
             c_owner_row = conn.execute(
-                "SELECT owner_id, seed_key, seed_version, seed_modified FROM characters WHERE id = ?",
+                "SELECT owner_id, seed_key, seed_version, seed_modified, dismissed_seed_version FROM characters WHERE id = ?",
                 (character_id,),
             ).fetchone()
+            c_owner_keys = c_owner_row.keys() if c_owner_row else ()
             effective_owner_id = (
                 c_owner_row["owner_id"]
-                if c_owner_row and "owner_id" in c_owner_row.keys()
+                if c_owner_row and "owner_id" in c_owner_keys
                 else owner_id
             )
             seed_key = c_owner_row["seed_key"] if c_owner_row else None
             seed_version = c_owner_row["seed_version"] if c_owner_row else None
-            next_seed_modified = 1 if seed_key else (int(c_owner_row["seed_modified"] or 0) if c_owner_row else 0)
+            prev_seed_modified = int(c_owner_row["seed_modified"] or 0) if c_owner_row else 0
+            next_seed_modified = 1 if seed_key else prev_seed_modified
+            dismissed_seed_version = (
+                c_owner_row["dismissed_seed_version"]
+                if c_owner_row and "dismissed_seed_version" in c_owner_keys
+                else None
+            )
 
             usage_row = conn.execute(
                 """
@@ -316,6 +323,49 @@ class CharacterVersionsMixin:
             quirks_flaws_json = json.dumps(payload.quirks_flaws)
             communication_style_json = json.dumps(payload.communication_style)
             unsupported_fields_json = json.dumps(clean_unsupported)
+
+            if not seed_key:
+                next_seed_modified = prev_seed_modified
+            elif prev_seed_modified:
+                next_seed_modified = 1
+            else:
+                orig_gallery_cmp = [(img.id, img.url, img.caption, img.created_at) for img in orig.gallery]
+                new_gallery_cmp = [(img.id, img.url, img.caption, img.created_at) for img in clean_g]
+                char_changed = (
+                    target_world_id != orig.world_id
+                    or payload.name != orig.name
+                    or payload.tagline != orig.tagline
+                    or payload.species != orig.species
+                    or payload.sex != orig.sex
+                    or payload.pronouns != orig.pronouns
+                    or payload.age != orig.age
+                    or payload.character_bio != orig.character_bio
+                    or clean_phys != (orig.physical_appearance or "")
+                    or payload.build_and_height != orig.build_and_height
+                    or list(payload.distinctive_features) != list(orig.distinctive_features)
+                    or payload.posture != orig.posture
+                    or list(payload.mannerisms) != list(orig.mannerisms)
+                    or list(clean_mods) != list(orig.modifications or [])
+                    or payload.visual_aesthetic != orig.visual_aesthetic
+                    or list(payload.personality_traits) != list(orig.personality_traits)
+                    or payload.core_persona != orig.core_persona
+                    or list(payload.moral_code) != list(orig.moral_code)
+                    or list(payload.quirks_flaws) != list(orig.quirks_flaws)
+                    or list(payload.communication_style) != list(orig.communication_style)
+                    or payload.initial_message != orig.initial_message
+                    or [it.model_dump() for it in clean_equipped_items] != [it.model_dump() for it in orig.equipped]
+                    or [it.model_dump() for it in clean_inventory_items] != [it.model_dump() for it in orig.inventory]
+                    or [v.model_dump() for v in payload.voice_anchors] != [v.model_dump() for v in orig.voice_anchors]
+                    or payload.baseline_psyche.model_dump() != orig.baseline_psyche.model_dump()
+                    or [m.model_dump() for m in payload.memory_shards] != [m.model_dump() for m in orig.memory_shards]
+                    or clean_tags != list(orig.tags)
+                    or creator_str != (orig.creator or "")
+                    or creator_notes_str != (orig.creator_notes or "")
+                    or clean_p != (orig.portraits or {})
+                    or new_gallery_cmp != orig_gallery_cmp
+                    or clean_unsupported != (orig.unsupported_fields or {})
+                )
+                next_seed_modified = 1 if char_changed else 0
 
             if campaigns_using == 0:
                 # In-place update (zero active campaigns reference this character)
@@ -448,7 +498,7 @@ class CharacterVersionsMixin:
                         voice_anchors_json, baseline_psyche_json, memory_shards_json,
                         tags_json, creator, creator_notes,
                         portraits_json, gallery_json, unsupported_fields_json,
-                        seed_key, seed_version, seed_modified, version,
+                        seed_key, seed_version, seed_modified, dismissed_seed_version, version,
                         pending_deletion, created_at
                     )
                     VALUES (
@@ -460,7 +510,7 @@ class CharacterVersionsMixin:
                         ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
-                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?,
                         0, ?
                     )
                     """,
@@ -502,6 +552,7 @@ class CharacterVersionsMixin:
                         seed_key,
                         seed_version,
                         next_seed_modified,
+                        dismissed_seed_version,
                         new_version,
                         now,
                     ),
@@ -703,17 +754,24 @@ class CharacterVersionsMixin:
         copied_media_for: str | None = None
         try:
             c_owner_row = conn.execute(
-                "SELECT owner_id, seed_key, seed_version, seed_modified FROM characters WHERE id = ?",
+                "SELECT owner_id, seed_key, seed_version, seed_modified, dismissed_seed_version FROM characters WHERE id = ?",
                 (character_id,),
             ).fetchone()
+            c_owner_keys = c_owner_row.keys() if c_owner_row else ()
             effective_owner_id = (
                 c_owner_row["owner_id"]
-                if c_owner_row and "owner_id" in c_owner_row.keys()
+                if c_owner_row and "owner_id" in c_owner_keys
                 else owner_id
             )
             seed_key = c_owner_row["seed_key"] if c_owner_row else None
             seed_version = c_owner_row["seed_version"] if c_owner_row else None
-            next_seed_modified = 1 if seed_key else (int(c_owner_row["seed_modified"] or 0) if c_owner_row else 0)
+            prev_seed_modified = int(c_owner_row["seed_modified"] or 0) if c_owner_row else 0
+            next_seed_modified = 1 if seed_key else prev_seed_modified
+            dismissed_seed_version = (
+                c_owner_row["dismissed_seed_version"]
+                if c_owner_row and "dismissed_seed_version" in c_owner_keys
+                else None
+            )
 
             usage_row = conn.execute(
                 """
@@ -834,7 +892,7 @@ class CharacterVersionsMixin:
                         voice_anchors_json, baseline_psyche_json, memory_shards_json,
                         tags_json, creator, creator_notes,
                         portraits_json, gallery_json, unsupported_fields_json,
-                        seed_key, seed_version, seed_modified, version,
+                        seed_key, seed_version, seed_modified, dismissed_seed_version, version,
                         pending_deletion, created_at
                     )
                     VALUES (
@@ -846,7 +904,7 @@ class CharacterVersionsMixin:
                         ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
-                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?,
                         0, ?
                     )
                     """,
@@ -888,6 +946,7 @@ class CharacterVersionsMixin:
                         seed_key,
                         seed_version,
                         next_seed_modified,
+                        dismissed_seed_version,
                         snap.version,
                         now,
                     ),

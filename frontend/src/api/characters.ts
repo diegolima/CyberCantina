@@ -1,9 +1,11 @@
 import type {
   CharacterRecord,
+  CharacterSeedUpdateResponse,
   CharacterVersionSummary,
   CharacterWizardDraft,
   CharacterWizardSeed,
   GalleryMediaImpactResponse,
+  SeedUpdateRequest,
   SillyTavernImportResponse,
 } from "../types";
 import { API_BASE, fetchJson } from "./client";
@@ -222,6 +224,23 @@ export const charactersApi = {
       `${API_BASE}/characters/${characterId}/gallery/${encodeURIComponent(imageId)}/video`,
       {
         method: "DELETE",
+      }
+    ),
+
+  updateSeededCharacter: (characterId: string, payload: SeedUpdateRequest) =>
+    fetchJson<CharacterSeedUpdateResponse>(
+      `${API_BASE}/characters/${characterId}/seed-update`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  dismissCharacterSeedUpdate: (characterId: string) =>
+    fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/seed-update/dismiss`,
+      {
+        method: "POST",
       }
     ),
 };

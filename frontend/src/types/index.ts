@@ -2,6 +2,7 @@ export * from "./affective";
 export * from "./adminMessages";
 export * from "./character";
 export * from "./world";
+export * from "./seed";
 export * from "./mechanics";
 export * from "./telemetry";
 export * from "./turn";

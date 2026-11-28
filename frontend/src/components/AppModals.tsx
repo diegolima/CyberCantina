@@ -11,6 +11,7 @@ import { NewCampaignModal } from "./NewCampaignModal";
 import { NotesModal } from "./NotesDrawer";
 import { PersonaEditorModal } from "./PersonaEditorModal";
 import { CharacterWizardModal, WorldWizardModal } from "./WizardModals";
+import { SeedUpdateModal } from "./SeedUpdateModal";
 import {
   AppSettings,
   CampaignRecord,
@@ -19,11 +20,16 @@ import {
   CharacterWizardDraft,
   PersonaRecord,
   ProfileModelSettingsResponse,
+  SeedUpdateMode,
   UserNote,
   UserProfile,
   WorldRecord,
   WorldWizardDraft,
 } from "../types";
+
+export type SeedUpdateTarget =
+  | { kind: "world"; world: WorldRecord }
+  | { kind: "character"; character: CharacterRecord };
 
 export interface AppModalsProps {
   DEFAULT_PERSONA_STORAGE_KEY: string;
@@ -122,6 +128,13 @@ export interface AppModalsProps {
   handleAccountDeleted: () => Promise<void>;
   refreshAuthStatus: () => Promise<unknown>;
   loadWorkspaceData: () => Promise<void>;
+  seedUpdateTarget: SeedUpdateTarget | null;
+  setSeedUpdateTarget: React.Dispatch<React.SetStateAction<SeedUpdateTarget | null>>;
+  seedUpdateBusy: boolean;
+  seedUpdateError: string | null;
+  seedUpdateRevision: number;
+  onConfirmSeedUpdate: (mode: SeedUpdateMode, copyName?: string) => Promise<void>;
+  onDismissSeedUpdate: () => Promise<void>;
 }
 
 export const AppModals: React.FC<AppModalsProps> = ({
@@ -200,7 +213,24 @@ export const AppModals: React.FC<AppModalsProps> = ({
   handleAccountDeleted,
   refreshAuthStatus,
   loadWorkspaceData,
+  seedUpdateTarget,
+  setSeedUpdateTarget,
+  seedUpdateBusy,
+  seedUpdateError,
+  seedUpdateRevision,
+  onConfirmSeedUpdate,
+  onDismissSeedUpdate,
 }) => {
+  useOverlayBackHandler({
+    id: "seed-update-modal",
+    isOpen: Boolean(seedUpdateTarget),
+    priority: 25,
+    onClose: () => {
+      if (!seedUpdateBusy) {
+        setSeedUpdateTarget(null);
+      }
+    },
+  });
   useOverlayBackHandler({
     id: "delete-confirmation-modal",
     isOpen: Boolean(deleteTarget),
@@ -310,11 +340,13 @@ export const AppModals: React.FC<AppModalsProps> = ({
 
       {inspectingCharacter && (
         <CharacterInspectorModal
+          key={`${inspectingCharacter.id}:${seedUpdateRevision}`}
           character={inspectingCharacter}
           worlds={worlds}
           appSettings={appSettings}
           isAdmin={currentUser.role === "admin"}
           onClose={() => setInspectingCharacter(null)}
+          onRequestSeedUpdate={(c) => setSeedUpdateTarget({ kind: "character", character: c })}
           onSaved={async (updatedChar, closeModal = true) => {
             if (closeModal) {
               setInspectingCharacter(null);
@@ -334,10 +366,12 @@ export const AppModals: React.FC<AppModalsProps> = ({
 
       {inspectingWorld && (
         <WorldInspectorModal
+          key={`${inspectingWorld.id}:${seedUpdateRevision}`}
           world={inspectingWorld}
           appSettings={appSettings}
           isAdmin={currentUser.role === "admin"}
           onClose={() => setInspectingWorld(null)}
+          onRequestSeedUpdate={(w) => setSeedUpdateTarget({ kind: "world", world: w })}
           onSaved={async (updatedWorld, closeModal = true) => {
             if (closeModal) {
               setInspectingWorld(null);
@@ -511,6 +545,34 @@ export const AppModals: React.FC<AppModalsProps> = ({
           }}
         />
       )}
+
+      {seedUpdateTarget &&
+        (seedUpdateTarget.kind === "world"
+          ? seedUpdateTarget.world.seed_update
+          : seedUpdateTarget.character.seed_update) && (
+          <SeedUpdateModal
+            entityKind={seedUpdateTarget.kind}
+            entityName={
+              seedUpdateTarget.kind === "world"
+                ? seedUpdateTarget.world.name
+                : seedUpdateTarget.character.name
+            }
+            seedUpdate={
+              (seedUpdateTarget.kind === "world"
+                ? seedUpdateTarget.world.seed_update
+                : seedUpdateTarget.character.seed_update)!
+            }
+            busy={seedUpdateBusy}
+            error={seedUpdateError}
+            onConfirm={onConfirmSeedUpdate}
+            onDismissVersion={onDismissSeedUpdate}
+            onClose={() => {
+              if (!seedUpdateBusy) {
+                setSeedUpdateTarget(null);
+              }
+            }}
+          />
+        )}
     </>
   );
 };

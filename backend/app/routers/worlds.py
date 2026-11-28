@@ -21,11 +21,16 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.auth import get_current_user
+from app.db.seed_updates import (
+    dismiss_seeded_world_update,
+    update_seeded_world_for_user,
+)
 from app.dependencies import (
     enforce_quota_and_write_webp,
     enforce_upload_policy,
     get_effective_user_model_settings,
     get_repo,
+    get_user_media_lock,
     read_upload_bytes_bounded,
     render_webp_bytes,
     run_entity_pruner,
@@ -34,10 +39,12 @@ from app.dependencies import (
 )
 from app.routers.media import stage_and_commit_linked_video
 from app.schemas.auth import UserProfile
+from app.schemas.seed import SeedUpdateRequest
 from app.schemas.world import (
     WorldMapDraft,
     WorldMapReimagineRequest,
     WorldRecord,
+    WorldSeedUpdateResponse,
     WorldUpdatePayload,
     WorldWizardCommitPayload,
     WorldWizardDraft,
@@ -201,6 +208,51 @@ def delete_world(
         result = repo.mark_world_pending_deletion(world_id, owner_id=current_user.id)
         background_tasks.add_task(run_entity_pruner)
         return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/worlds/{world_id}/seed-update", response_model=WorldSeedUpdateResponse)
+def apply_world_seed_update(
+    world_id: str,
+    req: SeedUpdateRequest,
+    background_tasks: BackgroundTasks,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldSeedUpdateResponse:
+    """Apply a built-in seed update to a library world (in-place, CoW-forked, or copy-and-update)."""
+    repo = get_repo()
+    try:
+        with get_user_media_lock(current_user.id):
+            updated_world, preserved_copy = update_seeded_world_for_user(
+                repo,
+                current_user.id,
+                world_id,
+                mode=req.mode,
+                copy_name=req.copy_name,
+            )
+        background_tasks.add_task(run_entity_pruner)
+        return WorldSeedUpdateResponse(
+            updated_world=updated_world,
+            preserved_copy=preserved_copy,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/worlds/{world_id}/seed-update/dismiss", response_model=WorldRecord)
+def dismiss_world_seed_update(
+    world_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Dismiss the current seed update version badge for a library world."""
+    repo = get_repo()
+    try:
+        with get_user_media_lock(current_user.id):
+            return dismiss_seeded_world_update(repo, current_user.id, world_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

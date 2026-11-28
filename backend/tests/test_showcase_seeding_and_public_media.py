@@ -18,8 +18,10 @@ from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
 from app.db.repository import CantinaRepository
 from app.db.seed import (
     SHOWCASE_CHARACTER_SEED_KEY,
-    SHOWCASE_SEED_VERSION,
+    SHOWCASE_CHARACTER_SEED_VERSION,
+    SHOWCASE_MEDIA_VERSION,
     SHOWCASE_WORLD_SEED_KEY,
+    SHOWCASE_WORLD_SEED_VERSION,
     ensure_public_showcase_media,
 )
 from app.engine.phase2_context import build_zone1_static_system_prompt
@@ -240,12 +242,12 @@ def test_per_user_showcase_seeding_and_full_field_validation(
         c_row = conn.execute("SELECT seed_key, seed_version, seed_modified FROM characters WHERE id = ?", (c["id"],)).fetchone()
         assert (w_row["seed_key"], w_row["seed_version"], w_row["seed_modified"]) == (
             SHOWCASE_WORLD_SEED_KEY,
-            SHOWCASE_SEED_VERSION,
+            SHOWCASE_WORLD_SEED_VERSION,
             0,
         )
         assert (c_row["seed_key"], c_row["seed_version"], c_row["seed_modified"]) == (
             SHOWCASE_CHARACTER_SEED_KEY,
-            SHOWCASE_SEED_VERSION,
+            SHOWCASE_CHARACTER_SEED_VERSION,
             0,
         )
     finally:
@@ -744,13 +746,22 @@ def test_showcase_v1_to_v2_migration_upgrades_existing_entities(
 
     conn = repo._connect()
     try:
+        assert SHOWCASE_MEDIA_VERSION == 2
         assert conn.execute("SELECT 1 FROM media_assets WHERE id = 'pub_v1_wmed_28416ce9b1'").fetchone() is None
-        assert conn.execute("SELECT seed_version FROM worlds WHERE id = ?", (w["id"],)).fetchone()["seed_version"] == 2
-        assert conn.execute("SELECT seed_version FROM characters WHERE id = ?", (c["id"],)).fetchone()["seed_version"] == 2
+        # Media migration updates public media IDs/URLs without artificially bumping content seed_version
+        assert conn.execute("SELECT seed_version FROM worlds WHERE id = ?", (w["id"],)).fetchone()["seed_version"] == 1
+        assert conn.execute("SELECT seed_version FROM characters WHERE id = ?", (c["id"],)).fetchone()["seed_version"] == 1
         cv_row = conn.execute("SELECT data_json FROM character_versions WHERE id = 'cver_v1_legacy_test'").fetchone()
         assert "/api/media/public/v2/characters/kira_vance/" in cv_row["data_json"]
     finally:
         conn.close()
+
+    assert upgraded_world["seed_update"]["update_available"] is True
+    assert upgraded_world["seed_update"]["current_version"] == 1
+    assert upgraded_world["seed_update"]["latest_version"] == SHOWCASE_WORLD_SEED_VERSION
+    assert upgraded_char["seed_update"]["update_available"] is True
+    assert upgraded_char["seed_update"]["current_version"] == 1
+    assert upgraded_char["seed_update"]["latest_version"] == SHOWCASE_CHARACTER_SEED_VERSION
 
     assert not v1_world_file.exists()
     assert not v1_char_portrait.exists()

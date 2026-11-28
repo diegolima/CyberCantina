@@ -20,6 +20,8 @@ export interface LocationProp {
   auto_spawned?: boolean;
 }
 
+import type { SeedUpdateInfo } from "./seed";
+
 export type CompassDirection = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 
 export type EdgeDistanceMode = "flexible" | "locked" | "non_euclidean";
@@ -189,6 +191,7 @@ export interface WorldRecord {
   lore_nodes: LoreNode[];
   media?: WorldMediaItem[];
   unsupported_fields?: Record<string, unknown>;
+  seed_update?: SeedUpdateInfo | null;
 }
 
 export interface LocationContainerDraft {

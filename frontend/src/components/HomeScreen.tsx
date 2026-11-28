@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowUpCircle,
   Computer,
   Cpu,
   Download,
@@ -73,6 +74,8 @@ export interface HomeScreenProps {
   onExportCampaign?: (campaign: CampaignRecord) => void;
   onDeleteCharacter?: (character: CharacterRecord) => void;
   onDeleteWorld?: (world: WorldRecord) => void;
+  onUpdateCharacter?: (character: CharacterRecord) => void;
+  onUpdateWorld?: (world: WorldRecord) => void;
   onDeletePersona?: (persona: PersonaRecord) => void;
   onRefreshData?: () => void;
   canInstallApp?: boolean;
@@ -95,6 +98,7 @@ interface HomeCardProps {
   accentColor: string;
   images: string[];
   imagePosition?: "top" | "center";
+  updateCount?: number;
   onCardClick: () => void;
   onNewClick: () => void;
 }
@@ -108,6 +112,7 @@ const HomeCard: React.FC<HomeCardProps> = ({
   accentColor,
   images,
   imagePosition = "center",
+  updateCount = 0,
   onCardClick,
   onNewClick,
 }) => {
@@ -176,6 +181,19 @@ const HomeCard: React.FC<HomeCardProps> = ({
         onClick={onCardClick}
         title={`Browse & select ${title.toLowerCase()}`}
       >
+        {updateCount > 0 && (
+          <span
+            className="home-card-update-badge"
+            title={`${updateCount} ${title.toLowerCase()} seed update available`}
+          >
+            <ArrowUpCircle size={12} />
+            <span>
+              {updateCount === 1
+                ? "Update available"
+                : `${updateCount} updates`}
+            </span>
+          </span>
+        )}
         {/* Subtle Carousel Progress Dots in Top Right */}
         {visibleImages.length > 1 && (
           <div
@@ -248,6 +266,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onExportCampaign,
   onDeleteCharacter,
   onDeleteWorld,
+  onUpdateCharacter,
+  onUpdateWorld,
   onDeletePersona,
   onRefreshData,
   canInstallApp = false,
@@ -330,6 +350,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const characterImages = useMemo(() => getCategoryPrimaryImages("characters", characters), [characters]);
   const worldImages = useMemo(() => getCategoryPrimaryImages("worlds", worlds), [worlds]);
   const campaignImages = useMemo(() => getCategoryPrimaryImages("campaigns", campaigns), [campaigns]);
+  const worldUpdateCount = useMemo(
+    () =>
+      worlds.filter(
+        (w) => Boolean(w.seed_update?.update_available && !w.seed_update.is_dismissed)
+      ).length,
+    [worlds]
+  );
+  const characterUpdateCount = useMemo(
+    () =>
+      characters.filter(
+        (c) => Boolean(c.seed_update?.update_available && !c.seed_update.is_dismissed)
+      ).length,
+    [characters]
+  );
 
   const handleOpenPicker = (category: EntityCategory) => {
     setActivePickerCategory(category);
@@ -619,6 +653,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 accentColor="var(--accent-cyan)"
                 images={worldImages}
                 imagePosition="center"
+                updateCount={worldUpdateCount}
                 onCardClick={() => handleOpenPicker("worlds")}
                 onNewClick={onNewWorld}
               />
@@ -634,6 +669,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 accentColor="var(--accent-amber)"
                 images={characterImages}
                 imagePosition="top"
+                updateCount={characterUpdateCount}
                 onCardClick={() => handleOpenPicker("characters")}
                 onNewClick={onNewCharacter}
               />
@@ -783,6 +819,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           onDeleteCampaign={onDeleteCampaign}
           onDeleteCharacter={onDeleteCharacter}
           onDeleteWorld={onDeleteWorld}
+          onUpdateCharacter={onUpdateCharacter}
+          onUpdateWorld={onUpdateWorld}
           onDeletePersona={onDeletePersona}
         />
       )}

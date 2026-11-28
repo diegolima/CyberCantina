@@ -9,6 +9,7 @@ from app.db.repository import CantinaRepository
 from app.db.seed import (
     SHOWCASE_SEED_VERSION,
     SHOWCASE_WORLD_SEED_KEY,
+    SHOWCASE_WORLD_SEED_VERSION,
     seed_showcase_for_user,
 )
 from app.engine.clerk.heuristics import heuristic_post_turn_delta
@@ -888,7 +889,7 @@ def test_green_lie_showcase_seed_uses_metric_distances(empty_repo: CantinaReposi
         row = conn.execute("SELECT seed_key, seed_version FROM worlds WHERE id = ?", (green_lie.id,)).fetchone()
         assert row is not None
         assert row["seed_key"] == SHOWCASE_WORLD_SEED_KEY
-        assert row["seed_version"] == SHOWCASE_SEED_VERSION
+        assert row["seed_version"] == SHOWCASE_WORLD_SEED_VERSION
     finally:
         conn.close()
 

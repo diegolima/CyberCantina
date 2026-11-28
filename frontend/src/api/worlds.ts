@@ -3,9 +3,11 @@ import type {
   LocationContainer,
   LocationEdge,
   LocationNode,
+  SeedUpdateRequest,
   WorldMapDraft,
   WorldMapReimagineRequest,
   WorldRecord,
+  WorldSeedUpdateResponse,
   WorldWizardDraft,
   WorldWizardSeed,
 } from "../types";
@@ -197,6 +199,23 @@ export const worldsApi = {
       `${API_BASE}/worlds/${worldId}/media/${encodeURIComponent(mediaId)}`,
       {
         method: "DELETE",
+      }
+    ),
+
+  updateSeededWorld: (worldId: string, payload: SeedUpdateRequest) =>
+    fetchJson<WorldSeedUpdateResponse>(
+      `${API_BASE}/worlds/${worldId}/seed-update`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  dismissWorldSeedUpdate: (worldId: string) =>
+    fetchJson<WorldRecord>(
+      `${API_BASE}/worlds/${worldId}/seed-update/dismiss`,
+      {
+        method: "POST",
       }
     ),
 };

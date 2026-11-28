@@ -143,7 +143,7 @@ flowchart TD
 | :--- | ---: | :--- |
 | `App` | 1 | `api`, `components (root)`, `components/party`, `components/shared`, `components/story`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `api` | 15 | `types` |
-| `components (root)` | 25 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
+| `components (root)` | 26 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/chat` | 23 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
@@ -161,6 +161,6 @@ flowchart TD
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 2 | `api`, `local`, `types`, `utils` |
-| `types` | 19 | *(leaf)* |
+| `types` | 20 | *(leaf)* |
 | `utils` | 20 | `types` |
 | `vite-env.d` | 1 | *(leaf)* |

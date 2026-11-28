@@ -562,6 +562,7 @@ def _serialize_world_for_zcc(
     """Serialize a WorldRecord for .zcc export, restoring extension keys and optionally staging media."""
     world_data = world.model_dump()
     world_data.pop("unsupported_fields", None)
+    world_data.pop("seed_update", None)
     if include_media and repo is not None and media_sources is not None:
         staged_media: list[dict[str, Any]] = []
         for m_item in (world_data.get("media") or []):
@@ -702,6 +703,7 @@ def build_zcc_export_to_file(
 
         char_data = char.model_dump()
         char_data.pop("unsupported_fields", None)
+        char_data.pop("seed_update", None)
         bio_norm = (char.character_bio or "").strip()
         phys_norm = str(char_data.get("physical_appearance") or "").strip()
         if not phys_norm or phys_norm == bio_norm:

@@ -23,6 +23,12 @@ from app.auth import (
 from app.config import settings
 from app.db.repos.base import utc_now_iso
 from app.db.seed import seed_showcase_for_user
+from app.db.seed_catalog import (
+    SHOWCASE_CHARACTER_SEED_KEY,
+    SHOWCASE_CHARACTER_SEED_VERSION,
+    SHOWCASE_WORLD_SEED_KEY,
+    SHOWCASE_WORLD_SEED_VERSION,
+)
 from app.dependencies import (
     attach_user_media_stats,
     clear_session_cookie,
@@ -558,6 +564,38 @@ def restore_default_assets(
             "Nothing restored — 'The Green Lie' and 'Yulia Halim' "
             "(or edited versions) already exist in your library."
         )
+
+    outdated_defaults: list[str] = []
+    if res["skipped_world"] or res["skipped_character"]:
+        conn = repo._connect()
+        try:
+            if res["skipped_world"]:
+                w_ver_row = conn.execute(
+                    """
+                    SELECT seed_version FROM worlds
+                    WHERE owner_id = ? AND seed_key = ? AND pending_deletion = 0
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (current_user.id, SHOWCASE_WORLD_SEED_KEY),
+                ).fetchone()
+                if w_ver_row and int(w_ver_row["seed_version"] or 0) < SHOWCASE_WORLD_SEED_VERSION:
+                    outdated_defaults.append("The Green Lie")
+            if res["skipped_character"]:
+                c_ver_row = conn.execute(
+                    """
+                    SELECT seed_version FROM characters
+                    WHERE owner_id = ? AND seed_key = ? AND pending_deletion = 0
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (current_user.id, SHOWCASE_CHARACTER_SEED_KEY),
+                ).fetchone()
+                if c_ver_row and int(c_ver_row["seed_version"] or 0) < SHOWCASE_CHARACTER_SEED_VERSION:
+                    outdated_defaults.append("Yulia Halim")
+        finally:
+            conn.close()
+    if outdated_defaults:
+        joined = " and ".join(outdated_defaults)
+        msg += f" Update available for {joined} — use the Update button in the Worlds or Characters library."
     return RestoreDefaultsResponse(
         restored_world=rw,
         restored_character=rc,

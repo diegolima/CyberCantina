@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.seed import SeedUpdateInfo
 from app.schemas.unsupported import (
     MAX_UNSUPPORTED_BYTES as MAX_UNSUPPORTED_BYTES,
     MAX_UNSUPPORTED_DEPTH as MAX_UNSUPPORTED_DEPTH,
@@ -884,6 +885,7 @@ CANONICAL_CHARACTER_RECORD_KEYS: frozenset[str] = frozenset(
         "portraits",
         "gallery",
         "unsupported_fields",
+        "seed_update",
     }
 )
 
@@ -1139,6 +1141,17 @@ class CharacterRecord(_CharacterFieldsBase):
         description="Monotonically increasing version counter.",
     )
     created_at: str
+    seed_update: SeedUpdateInfo | None = Field(
+        default=None,
+        description="Library-only showcase seed update availability metadata (excluded from .zcc exports and campaigns).",
+    )
+
+
+class CharacterSeedUpdateResponse(BaseModel):
+    """Response payload after updating a seeded character (optionally preserving a custom copy)."""
+
+    updated_character: CharacterRecord
+    preserved_copy: CharacterRecord | None = None
 
 
 class CharacterVersionSummary(BaseModel):

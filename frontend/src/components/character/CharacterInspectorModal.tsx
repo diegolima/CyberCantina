@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowUpCircle,
   Brain,
   Check,
   Database,
@@ -59,6 +60,7 @@ interface CharacterInspectorModalProps {
   isAdmin?: boolean;
   onClose: () => void;
   onSaved: (updated: CharacterRecord, closeModal?: boolean) => void;
+  onRequestSeedUpdate?: (character: CharacterRecord) => void;
 }
 
 type CharacterTab =
@@ -73,7 +75,15 @@ type CharacterTab =
 
 export const CharacterInspectorModal: React.FC<
   CharacterInspectorModalProps
-> = ({ character, worlds, appSettings = null, isAdmin = false, onClose, onSaved }) => {
+> = ({
+  character,
+  worlds,
+  appSettings = null,
+  isAdmin = false,
+  onClose,
+  onSaved,
+  onRequestSeedUpdate,
+}) => {
   const [activeTab, setActiveTab] = useState<CharacterTab>("base");
   const [name, setName] = useState(character.name);
   const [tagline, setTagline] = useState(character.tagline);
@@ -643,6 +653,54 @@ export const CharacterInspectorModal: React.FC<
             <X size={15} />
           </button>
         </div>
+
+        {!viewingHistory &&
+          character.seed_update?.update_available &&
+          onRequestSeedUpdate && (
+            <div
+              className={`seed-update-banner ${
+                character.seed_update.is_dismissed ? "is-skipped" : "is-amber"
+              }`}
+              role="region"
+              aria-label="Character seed update"
+            >
+              <div className="seed-update-banner-main">
+                <ArrowUpCircle
+                  size={15}
+                  color={
+                    character.seed_update.is_dismissed
+                      ? "var(--text-muted)"
+                      : "var(--accent-amber)"
+                  }
+                />
+                {character.seed_update.is_dismissed ? (
+                  <span>
+                    Built-in seed v{character.seed_update.latest_version} available
+                    (skipped)
+                  </span>
+                ) : (
+                  <span>
+                    <strong>
+                      Update available (v{character.seed_update.current_version} → v
+                      {character.seed_update.latest_version})
+                    </strong>
+                    {character.seed_update.changelog
+                      ? ` — ${character.seed_update.changelog}`
+                      : ""}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  character.seed_update.is_dismissed ? "" : "btn-amber"
+                }`}
+                onClick={() => onRequestSeedUpdate(character)}
+              >
+                {character.seed_update.is_dismissed ? "Review Update" : "Update"}
+              </button>
+            </div>
+          )}
 
         {viewingHistory && historicalData && (
           <div

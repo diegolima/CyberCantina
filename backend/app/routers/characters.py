@@ -24,6 +24,10 @@ from app.config import settings
 from app.db.repos.base import is_public_character_media_url
 from app.db.repos.media_assets import build_asset_url, extract_asset_id_from_url
 from app.db.repository import utc_now_iso
+from app.db.seed_updates import (
+    dismiss_seeded_character_update,
+    update_seeded_character_for_user,
+)
 from app.dependencies import (
     enforce_quota_and_write_webp,
     enforce_upload_policy,
@@ -54,12 +58,14 @@ from app.schemas.character import (
     CharacterQuirksExtractionRequest,
     CharacterQuirksExtractionResponse,
     CharacterRecord,
+    CharacterSeedUpdateResponse,
     CharacterUpdatePayload,
     CharacterVersionSummary,
     CharacterWizardDraft,
     CharacterWizardSeed,
     GalleryImage,
 )
+from app.schemas.seed import SeedUpdateRequest
 from app.schemas.world import WorldRecord, WorldWizardDraft
 from app.wizards.character_extractor import (
     extract_features_from_bio,
@@ -886,3 +892,48 @@ def delete_character_gallery_image(
             pass
 
     return updated
+
+
+@router.post("/api/characters/{character_id}/seed-update", response_model=CharacterSeedUpdateResponse)
+def apply_character_seed_update(
+    character_id: str,
+    req: SeedUpdateRequest,
+    background_tasks: BackgroundTasks,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterSeedUpdateResponse:
+    """Apply a built-in seed update to a library character (in-place, CoW-forked, or copy-and-update)."""
+    repo = get_repo()
+    try:
+        with get_user_media_lock(current_user.id):
+            updated_character, preserved_copy = update_seeded_character_for_user(
+                repo,
+                current_user.id,
+                character_id,
+                mode=req.mode,
+                copy_name=req.copy_name,
+            )
+        background_tasks.add_task(run_entity_pruner)
+        return CharacterSeedUpdateResponse(
+            updated_character=updated_character,
+            preserved_copy=preserved_copy,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/characters/{character_id}/seed-update/dismiss", response_model=CharacterRecord)
+def dismiss_character_seed_update(
+    character_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    """Dismiss the current seed update version badge for a library character."""
+    repo = get_repo()
+    try:
+        with get_user_media_lock(current_user.id):
+            return dismiss_seeded_character_update(repo, current_user.id, character_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -84,6 +84,8 @@
 | `DELETE` | `/api/characters/{character_id}/gallery/{image_id}/video` | `app.routers.characters.delete_character_gallery_video` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `DELETE` | `/api/characters/{character_id}/portraits/{emotion}` | `app.routers.characters.delete_character_portrait` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `POST` | `/api/characters/{character_id}/portraits/{emotion}` | `app.routers.characters.upload_character_portrait` | `CharacterRecord` | `frontend/src/api/characters.ts` |
+| `POST` | `/api/characters/{character_id}/seed-update` | `app.routers.characters.apply_character_seed_update` | `CharacterSeedUpdateResponse` | `frontend/src/api/characters.ts` |
+| `POST` | `/api/characters/{character_id}/seed-update/dismiss` | `app.routers.characters.dismiss_character_seed_update` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `GET` | `/api/characters/{character_id}/versions` | `app.routers.characters.list_character_versions` | `list` | `frontend/src/api/characters.ts` |
 | `GET` | `/api/characters/{character_id}/versions/{version}` | `app.routers.characters.get_character_version` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `POST` | `/api/characters/{character_id}/versions/{version}/restore` | `app.routers.characters.restore_character_version` | `CharacterRecord` | `frontend/src/api/characters.ts` |
@@ -179,6 +181,8 @@
 | `PATCH` | `/api/worlds/{world_id}/media/{media_id}` | `app.routers.worlds.update_world_media_label` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 | `GET` | `/api/worlds/{world_id}/media/{media_id}/impact` | `app.routers.worlds.get_world_media_delete_impact` | `dict` | `frontend/src/api/worlds.ts` |
 | `DELETE` | `/api/worlds/{world_id}/media/{media_id}/video` | `app.routers.worlds.delete_world_media_video` | `WorldRecord` | `frontend/src/api/worlds.ts` |
+| `POST` | `/api/worlds/{world_id}/seed-update` | `app.routers.worlds.apply_world_seed_update` | `WorldSeedUpdateResponse` | `frontend/src/api/worlds.ts` |
+| `POST` | `/api/worlds/{world_id}/seed-update/dismiss` | `app.routers.worlds.dismiss_world_seed_update` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 
 ## 2. SQLite Schema (`backend/app/db/schema.sql`)
 
@@ -318,6 +322,8 @@ erDiagram
 | `backend/app/db/provider_store.py` | SQLite persistence for LLM providers (tenant-scoped, optimistic concurrency, sealed secrets). |
 | `backend/app/db/repository.py` | Branch-aware SQLite repository for Worlds, Characters, Spatial Graph, and Turn Trees. |
 | `backend/app/db/seed.py` | Default showcase scenario seeder ('The Green Lie' & 'Yulia Halim'). |
+| `backend/app/db/seed_catalog.py` | Central registry and version-check helpers for built-in showcase seeds. |
+| `backend/app/db/seed_updates.py` | Player-triggered update and dismissal operations for seeded worlds and characters. |
 | `backend/app/db/vector_math.py` | Embedding helpers, lexical TF-IDF activations, MMR, and RRF math. |
 | `backend/app/db/vector_store.py` | Hybrid semantic vector store and branch-aware memory retrieval. |
 
@@ -637,6 +643,7 @@ erDiagram
 | `backend/app/schemas/physical.py` | Leaf physical stance & motion continuity schemas, normalization, and staleness resolution. |
 | `backend/app/schemas/prompt.py` | Schemas for Prompt Presets, Template Customization, and Documentation. |
 | `backend/app/schemas/provider.py` | Pydantic schemas and domain records for LLM providers. |
+| `backend/app/schemas/seed.py` | Leaf schemas for showcase/seed update inspection, confirmation, and dismissal. |
 | `backend/app/schemas/telemetry.py` | Leaf Pydantic v2 schemas for per-turn LLM token usage and Context Health telemetry. |
 | `backend/app/schemas/turn.py` | Turn pipeline, mechanics/RNG, state snapshot, and campaign tree schemas. |
 | `backend/app/schemas/unsupported.py` | Shared bounded validation helpers for entity unsupported_fields extension containers. |
@@ -737,6 +744,7 @@ erDiagram
 | `frontend/src/components/PersonaMediaTab.tsx` |
 | `frontend/src/components/PromptPresetsManager.tsx` |
 | `frontend/src/components/RelaySidebarBadge.tsx` |
+| `frontend/src/components/SeedUpdateModal.tsx` |
 | `frontend/src/components/SettingsModal.tsx` |
 | `frontend/src/components/SpatialTopologyView.tsx` |
 | `frontend/src/components/TagChipsInput.tsx` |
@@ -997,6 +1005,7 @@ erDiagram
 | `frontend/src/types/prompts.ts` |
 | `frontend/src/types/providers.ts` |
 | `frontend/src/types/pwa.ts` |
+| `frontend/src/types/seed.ts` |
 | `frontend/src/types/telemetry.ts` |
 | `frontend/src/types/turn.ts` |
 | `frontend/src/types/world.ts` |

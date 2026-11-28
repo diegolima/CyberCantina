@@ -1,6 +1,7 @@
 import React, { useId, useMemo, useRef, useState } from "react";
 import { useModalDialog } from "../hooks/useModalDialog";
 import {
+  ArrowUpCircle,
   Check,
   Download,
   FolderKanban,
@@ -37,6 +38,8 @@ export interface HomeEntityPickerModalProps {
   onDeleteCampaign?: (campaign: CampaignRecord) => void;
   onDeleteCharacter?: (character: CharacterRecord) => void;
   onDeleteWorld?: (world: WorldRecord) => void;
+  onUpdateCharacter?: (character: CharacterRecord) => void;
+  onUpdateWorld?: (world: WorldRecord) => void;
   onDeletePersona?: (persona: PersonaRecord) => void;
 }
 
@@ -57,6 +60,8 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
   onDeleteCampaign,
   onDeleteCharacter,
   onDeleteWorld,
+  onUpdateCharacter,
+  onUpdateWorld,
   onDeletePersona,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -393,6 +398,23 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                       )}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {onUpdateCharacter &&
+                        char.seed_update?.update_available &&
+                        !char.seed_update.is_dismissed && (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-amber home-picker-update-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onClose();
+                              onUpdateCharacter(char);
+                            }}
+                            title={`Update ${char.name} to v${char.seed_update.latest_version}`}
+                          >
+                            <ArrowUpCircle size={12} />
+                            <span>Update</span>
+                          </button>
+                        )}
                       <button
                         type="button"
                         className="btn btn-sm"
@@ -460,6 +482,23 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {onUpdateWorld &&
+                        world.seed_update?.update_available &&
+                        !world.seed_update.is_dismissed && (
+                          <button
+                            type="button"
+                            className="btn btn-sm home-picker-update-btn is-cyan"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onClose();
+                              onUpdateWorld(world);
+                            }}
+                            title={`Update ${world.name} to v${world.seed_update.latest_version}`}
+                          >
+                            <ArrowUpCircle size={12} />
+                            <span>Update</span>
+                          </button>
+                        )}
                       <button
                         type="button"
                         className="btn btn-sm"

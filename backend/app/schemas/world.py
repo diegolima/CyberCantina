@@ -17,6 +17,7 @@ from app.schemas.character import (
     ItemInstance,
     sanitize_character_markup,
 )
+from app.schemas.seed import SeedUpdateInfo
 from app.schemas.unsupported import sanitize_unsupported_fields_dict
 
 WALKING_METERS_PER_MINUTE: Final[int] = 70
@@ -1654,6 +1655,10 @@ class WorldRecord(BaseModel):
         default_factory=dict,
         description="Read-only deprecated or unrecognized future .zcc attributes excluded from LLM prompts.",
     )
+    seed_update: SeedUpdateInfo | None = Field(
+        default=None,
+        description="Library-only showcase seed update availability metadata (excluded from .zcc exports and campaigns).",
+    )
 
     @field_validator("lore_nodes")
     @classmethod
@@ -1707,8 +1712,16 @@ CANONICAL_WORLD_RECORD_KEYS: frozenset[str] = frozenset(
         "lore_nodes",
         "media",
         "unsupported_fields",
+        "seed_update",
     }
 )
+
+
+class WorldSeedUpdateResponse(BaseModel):
+    """Response payload after updating a seeded world (optionally preserving a custom copy)."""
+
+    updated_world: WorldRecord
+    preserved_copy: WorldRecord | None = None
 CANONICAL_CONTAINER_KEYS: frozenset[str] = frozenset(
     {
         "id",

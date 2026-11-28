@@ -3,6 +3,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
+  ArrowUpCircle,
   BookOpen,
   Check,
   Compass,
@@ -154,6 +155,7 @@ interface WorldInspectorModalProps {
   onOverridePlayerPhysicalState?: (
     payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
+  onRequestSeedUpdate?: (world: WorldRecord) => void;
 }
 
 export type WorldTab = "base" | "media" | "map" | "codex" | "settings" | "unsupported";
@@ -196,6 +198,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   onOverrideCharacterLocation,
   onOverrideCharacterPhysicalState,
   onOverridePlayerPhysicalState,
+  onRequestSeedUpdate,
 }) => {
   const isCampaignMode = mode === "campaign";
   const [activeTab, setActiveTab] = useState<WorldTab>(() =>
@@ -951,6 +954,57 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <X size={15} />
           </button>
         </div>
+
+        {!isCampaignMode &&
+          mode === "inspector" &&
+          world?.seed_update?.update_available &&
+          onRequestSeedUpdate && (
+            <div
+              className={`seed-update-banner ${
+                world.seed_update.is_dismissed ? "is-skipped" : "is-cyan"
+              }`}
+              role="region"
+              aria-label="World seed update"
+            >
+              <div className="seed-update-banner-main">
+                <ArrowUpCircle
+                  size={15}
+                  color={
+                    world.seed_update.is_dismissed
+                      ? "var(--text-muted)"
+                      : "var(--accent-cyan)"
+                  }
+                />
+                {world.seed_update.is_dismissed ? (
+                  <span>
+                    Built-in seed v{world.seed_update.latest_version} available
+                    (skipped)
+                  </span>
+                ) : (
+                  <span>
+                    <strong>
+                      Update available (v{world.seed_update.current_version} → v
+                      {world.seed_update.latest_version})
+                    </strong>
+                    {world.seed_update.changelog
+                      ? ` — ${world.seed_update.changelog}`
+                      : ""}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  world.seed_update.is_dismissed
+                    ? ""
+                    : "seed-update-cyan-btn"
+                }`}
+                onClick={() => onRequestSeedUpdate(world)}
+              >
+                {world.seed_update.is_dismissed ? "Review Update" : "Update"}
+              </button>
+            </div>
+          )}
 
         <div className="modal-tabs modal-tabs-cyan" role="tablist">
           <button

@@ -1,3 +1,4 @@
+import type { SeedUpdateInfo } from "./seed";
 import type {
   AffectiveCareState,
   AgencyLevel,
@@ -255,6 +256,7 @@ export interface CharacterRecord extends Omit<CharacterWizardDraft, "equipped" |
   portraits: Record<string, string>;
   gallery: GalleryImage[];
   created_at: string;
+  seed_update?: SeedUpdateInfo | null;
 }
 
 export interface CharacterVersionSummary {

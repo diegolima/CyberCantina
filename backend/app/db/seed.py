@@ -14,6 +14,17 @@ import numpy as np
 
 from app.db.repos.base import _location_lore_vector_fields, utc_now_iso
 from app.db.repository import CantinaRepository
+from app.db.seed_catalog import (
+    SEED_CATALOG as SEED_CATALOG,
+    SHOWCASE_CHARACTER_SEED_KEY as SHOWCASE_CHARACTER_SEED_KEY,
+    SHOWCASE_CHARACTER_SEED_VERSION as SHOWCASE_CHARACTER_SEED_VERSION,
+    SHOWCASE_MEDIA_VERSION as SHOWCASE_MEDIA_VERSION,
+    SHOWCASE_SEED_VERSION as SHOWCASE_SEED_VERSION,
+    SHOWCASE_WORLD_SEED_KEY as SHOWCASE_WORLD_SEED_KEY,
+    SHOWCASE_WORLD_SEED_VERSION as SHOWCASE_WORLD_SEED_VERSION,
+    SeedAssetSpec as SeedAssetSpec,
+    get_seed_spec as get_seed_spec,
+)
 from app.db.vector_store import combine_entry_text, current_embedding_fingerprint, embed_text_sync
 from app.schemas.character import (
     BaselinePsyche,
@@ -38,16 +49,11 @@ from app.security.media_path import (
     safe_resolve_world_media_file_path,
 )
 
-SHOWCASE_SEED_VERSION = 2
-SHOWCASE_WORLD_SEED_KEY = "showcase:the_green_lie"
-# Preserved as stable internal provenance/media keys for existing DB rows and immutable public media URLs.
-SHOWCASE_CHARACTER_SEED_KEY = "showcase:kira_vance"
-
 _SHOWCASE_DATA_DIR = Path(__file__).resolve().parent / "showcase_data" / "the_green_lie"
 _SHOWCASE_MEDIA_DIR = _SHOWCASE_DATA_DIR / "media"
 
 _PUBLIC_CHARACTER_SLUG = "kira_vance"
-_PUBLIC_CHARACTER_VERSION_TAG = f"v{SHOWCASE_SEED_VERSION}"
+_PUBLIC_CHARACTER_VERSION_TAG = f"v{SHOWCASE_MEDIA_VERSION}"
 _PUBLIC_CHARACTER_PORTRAIT_FILE = "default_0b97fa1a.webp"
 _PUBLIC_CHARACTER_GALLERY_FILE = "img_59a7be04b1.webp"
 
@@ -66,20 +72,20 @@ def _load_showcase_character_json() -> dict[str, Any]:
 
 
 def _public_world_media_id(orig_media_id: str) -> str:
-    return f"pub_v{SHOWCASE_SEED_VERSION}_{orig_media_id}"
+    return f"pub_v{SHOWCASE_MEDIA_VERSION}_{orig_media_id}"
 
 
 def _public_world_media_filename(orig_media_id: str) -> str:
-    return f"pub_v{SHOWCASE_SEED_VERSION}_{orig_media_id}.webp"
+    return f"pub_v{SHOWCASE_MEDIA_VERSION}_{orig_media_id}.webp"
 
 
 def _public_world_video_id(orig_video_id: str) -> str:
-    return f"pub_v{SHOWCASE_SEED_VERSION}_{orig_video_id}"
+    return f"pub_v{SHOWCASE_MEDIA_VERSION}_{orig_video_id}"
 
 
 def _public_world_video_filename(orig_video_id: str, ext: str = ".mp4") -> str:
     clean_ext = ext if ext.startswith(".") else f".{ext}"
-    return f"pub_v{SHOWCASE_SEED_VERSION}_{orig_video_id}{clean_ext}"
+    return f"pub_v{SHOWCASE_MEDIA_VERSION}_{orig_video_id}{clean_ext}"
 
 
 def _copy_if_needed(src: Path, dst: Path) -> int:
@@ -117,20 +123,17 @@ def _migrate_v1_showcase_to_v2(
         f"SELECT 1 FROM media_assets WHERE id IN ({ph}) LIMIT 1",
         v1_ids,
     ).fetchone()
-    has_v1_worlds = conn.execute(
-        "SELECT 1 FROM worlds WHERE seed_key = ? AND COALESCE(seed_version, 0) < ? LIMIT 1",
-        (SHOWCASE_WORLD_SEED_KEY, SHOWCASE_SEED_VERSION),
+    has_v1_world_links = conn.execute(
+        f"SELECT 1 FROM world_media_links WHERE media_id IN ({ph}) LIMIT 1",
+        v1_ids,
     ).fetchone()
     has_v1_chars = conn.execute(
         """
         SELECT 1 FROM characters
-        WHERE (seed_key = ? AND COALESCE(seed_version, 0) < ?)
-           OR portraits_json LIKE ? OR gallery_json LIKE ?
+        WHERE portraits_json LIKE ? OR gallery_json LIKE ?
         LIMIT 1
         """,
         (
-            SHOWCASE_CHARACTER_SEED_KEY,
-            SHOWCASE_SEED_VERSION,
             f"%{old_char_prefix}%",
             f"%{old_char_prefix}%",
         ),
@@ -143,7 +146,7 @@ def _migrate_v1_showcase_to_v2(
         "SELECT 1 FROM turn_nodes WHERE post_turn_json LIKE '%pub_v1_%' LIMIT 1"
     ).fetchone()
 
-    if not (has_v1_assets or has_v1_worlds or has_v1_chars or has_v1_char_vers or has_v1_turns):
+    if not (has_v1_assets or has_v1_world_links or has_v1_chars or has_v1_char_vers or has_v1_turns):
         return
 
     for old_id, new_id in v1_to_v2_media.items():
@@ -201,15 +204,6 @@ def _migrate_v1_showcase_to_v2(
                     (json.dumps(post_data), t_row["id"]),
                 )
 
-    conn.execute(
-        """
-        UPDATE worlds
-        SET seed_version = ?
-        WHERE seed_key = ? AND COALESCE(seed_version, 0) < ?
-        """,
-        (SHOWCASE_SEED_VERSION, SHOWCASE_WORLD_SEED_KEY, SHOWCASE_SEED_VERSION),
-    )
-
     if old_char_prefix != new_char_prefix:
         c_rows = conn.execute(
             """
@@ -226,14 +220,6 @@ def _migrate_v1_showcase_to_v2(
                 "UPDATE characters SET portraits_json = ?, gallery_json = ? WHERE id = ?",
                 (new_p, new_g, cr["id"]),
             )
-        conn.execute(
-            """
-            UPDATE characters
-            SET seed_version = ?
-            WHERE seed_key = ? AND COALESCE(seed_version, 0) < ?
-            """,
-            (SHOWCASE_SEED_VERSION, SHOWCASE_CHARACTER_SEED_KEY, SHOWCASE_SEED_VERSION),
-        )
 
         cv_rows = conn.execute(
             "SELECT id, data_json FROM character_versions WHERE data_json LIKE ?",
@@ -257,7 +243,7 @@ def _cleanup_legacy_v1_showcase_files(
     world_data: dict[str, Any],
 ) -> None:
     """Best-effort removal of superseded v1 showcase media files on disk."""
-    if SHOWCASE_SEED_VERSION <= 1:
+    if SHOWCASE_MEDIA_VERSION <= 1:
         return
     for item in world_data.get("media", []):
         orig_id = str(item.get("id") or "").strip()
@@ -475,6 +461,342 @@ def ensure_public_showcase_media(repo: CantinaRepository) -> dict[str, str]:
     return media_id_map
 
 
+def _populate_green_lie_world_rows(
+    conn: Any,
+    repo: CantinaRepository,
+    target_world_id: str,
+    media_id_map: dict[str, str],
+    w_data: dict[str, Any],
+    now: str,
+) -> dict[str, str]:
+    """Insert showcase media links, containers, locations, lore, props, edges, and vectors for target_world_id."""
+    id_remap: dict[str, str] = {}
+
+    # Link shared public world media
+    for idx, m_item in enumerate(w_data.get("media", [])):
+        pub_media_id = media_id_map.get(str(m_item["id"]))
+        if not pub_media_id:
+            continue
+        conn.execute(
+            """
+            INSERT INTO world_media_links (world_id, media_id, sort_order, label_override, created_at)
+            VALUES (?, ?, ?, NULL, ?)
+            """,
+            (target_world_id, pub_media_id, int(m_item.get("sort_order", idx)), now),
+        )
+
+    # Insert containers ordered highest depth -> lowest so parents exist first
+    containers = sorted(
+        w_data.get("containers", []),
+        key=lambda c: (-int(c.get("depth", 1)), str(c.get("name", ""))),
+    )
+    for cont in containers:
+        old_c_id = str(cont["id"])
+        id_remap[old_c_id] = f"cont_{uuid.uuid4().hex[:10]}"
+
+    for loc in w_data.get("locations", []):
+        old_loc_id = str(loc["id"])
+        id_remap[old_loc_id] = f"loc_{uuid.uuid4().hex[:10]}"
+
+    for cont in containers:
+        old_c_id = str(cont["id"])
+        new_c_id = id_remap[old_c_id]
+        parent_id = (
+            id_remap.get(str(cont["parent_container_id"]))
+            if cont.get("parent_container_id")
+            else None
+        )
+        img_id = (
+            media_id_map.get(str(cont["image_media_id"]))
+            if cont.get("image_media_id")
+            else None
+        )
+        ghost_coords_json = json.dumps(
+            remap_ghost_coords_dict(cont.get("ghost_coords") or {}, id_remap)
+        )
+        conn.execute(
+            """
+            INSERT INTO location_containers (
+                id, world_id, created_at_turn_id, parent_container_id, depth, name,
+                description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, image_media_id, created_at
+            )
+            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_c_id,
+                target_world_id,
+                parent_id,
+                int(cont["depth"]),
+                str(cont["name"]),
+                str(cont.get("description") or ""),
+                json.dumps(cont.get("environmental_tags") or []),
+                cont.get("ui_x"),
+                cont.get("ui_y"),
+                ghost_coords_json,
+                cont.get("icon"),
+                img_id,
+                now,
+            ),
+        )
+        for c_lore in cont.get("lore_nodes") or []:
+            old_cl_id = str(c_lore.get("id") or "")
+            new_cl_id = f"lore_{uuid.uuid4().hex[:10]}"
+            if old_cl_id:
+                id_remap[old_cl_id] = new_cl_id
+            tags = list(c_lore.get("entity_tags") or [])
+            conn.execute(
+                """
+                INSERT INTO lore_nodes (
+                    id, world_id, location_id, container_id, campaign_id,
+                    title, category, content, entity_tags_json
+                )
+                VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?)
+                """,
+                (
+                    new_cl_id,
+                    target_world_id,
+                    new_c_id,
+                    str(c_lore["title"]),
+                    str(c_lore["category"]),
+                    str(c_lore["content"]),
+                    json.dumps(tags),
+                ),
+            )
+            if str(c_lore["category"]) != "secret":
+                vec_title, vec_keywords = _location_lore_vector_fields(
+                    str(cont["name"]), str(c_lore["title"]), tags
+                )
+                vec = _get_cached_showcase_embedding(
+                    f"cont_lore:{old_cl_id or new_cl_id}",
+                    combine_entry_text(vec_title, str(c_lore["content"]), vec_keywords),
+                )
+                repo.vector_store.upsert_entry(
+                    entry_id=f"lore_{new_cl_id}",
+                    source_type="container_lore",
+                    world_id=target_world_id,
+                    container_id=new_c_id,
+                    title=vec_title,
+                    content=str(c_lore["content"]),
+                    keywords=vec_keywords,
+                    embedding=vec,
+                    conn=conn,
+                )
+
+    # Insert locations + location-scoped lore
+    for loc in w_data.get("locations", []):
+        old_loc_id = str(loc["id"])
+        new_loc_id = id_remap[old_loc_id]
+        cont_id = (
+            id_remap.get(str(loc["container_id"]))
+            if loc.get("container_id")
+            else None
+        )
+        img_id = (
+            media_id_map.get(str(loc["image_media_id"]))
+            if loc.get("image_media_id")
+            else None
+        )
+        raw_anchor_id = str(loc.get("anchor_location_id") or "").strip()
+        anchor_id = (
+            id_remap.get(raw_anchor_id)
+            if (raw_anchor_id and cont_id is not None)
+            else None
+        )
+        if anchor_id == new_loc_id:
+            anchor_id = None
+        conn.execute(
+            """
+            INSERT INTO location_nodes (
+                id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
+                is_entry_exit, name, summary, description, environmental_tags_json,
+                is_starting_location, is_hub, starting_message, ui_x, ui_y, icon,
+                anchor_location_id, image_media_id
+            )
+            VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_loc_id,
+                target_world_id,
+                cont_id,
+                1 if loc.get("is_entry_exit") else 0,
+                str(loc["name"]),
+                str(loc.get("summary") or ""),
+                str(loc.get("description") or ""),
+                json.dumps(loc.get("environmental_tags") or []),
+                1 if loc.get("is_starting_location") else 0,
+                1 if loc.get("is_hub") else 0,
+                str(loc.get("starting_message") or ""),
+                loc.get("ui_x"),
+                loc.get("ui_y"),
+                loc.get("icon"),
+                anchor_id,
+                img_id,
+            ),
+        )
+        for l_lore in loc.get("lore_nodes") or []:
+            old_ll_id = str(l_lore.get("id") or "")
+            new_ll_id = f"lore_{uuid.uuid4().hex[:10]}"
+            if old_ll_id:
+                id_remap[old_ll_id] = new_ll_id
+            tags = list(l_lore.get("entity_tags") or [])
+            conn.execute(
+                """
+                INSERT INTO lore_nodes (
+                    id, world_id, location_id, container_id, campaign_id,
+                    title, category, content, entity_tags_json
+                )
+                VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+                """,
+                (
+                    new_ll_id,
+                    target_world_id,
+                    new_loc_id,
+                    str(l_lore["title"]),
+                    str(l_lore["category"]),
+                    str(l_lore["content"]),
+                    json.dumps(tags),
+                ),
+            )
+            if str(l_lore["category"]) != "secret":
+                vec_title, vec_keywords = _location_lore_vector_fields(
+                    str(loc["name"]), str(l_lore["title"]), tags
+                )
+                vec = _get_cached_showcase_embedding(
+                    f"loc_lore:{old_ll_id or new_ll_id}",
+                    combine_entry_text(vec_title, str(l_lore["content"]), vec_keywords),
+                )
+                repo.vector_store.upsert_entry(
+                    entry_id=f"lore_{new_ll_id}",
+                    source_type="location_lore",
+                    world_id=target_world_id,
+                    location_id=new_loc_id,
+                    title=vec_title,
+                    content=str(l_lore["content"]),
+                    keywords=vec_keywords,
+                    embedding=vec,
+                    conn=conn,
+                )
+
+    # World-level lore nodes
+    for w_lore in w_data.get("lore_nodes", []):
+        old_wl_id = str(w_lore.get("id") or "")
+        new_wl_id = f"lore_{uuid.uuid4().hex[:10]}"
+        if old_wl_id:
+            id_remap[old_wl_id] = new_wl_id
+        tags = list(w_lore.get("entity_tags") or [])
+        conn.execute(
+            """
+            INSERT INTO lore_nodes (
+                id, world_id, location_id, container_id, campaign_id,
+                title, category, content, entity_tags_json
+            )
+            VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, ?)
+            """,
+            (
+                new_wl_id,
+                target_world_id,
+                str(w_lore["title"]),
+                str(w_lore["category"]),
+                str(w_lore["content"]),
+                json.dumps(tags),
+            ),
+        )
+        vec = _get_cached_showcase_embedding(
+            f"world_lore:{old_wl_id or new_wl_id}",
+            combine_entry_text(str(w_lore["title"]), str(w_lore["content"]), tags),
+        )
+        repo.vector_store.upsert_entry(
+            entry_id=f"lore_{new_wl_id}",
+            source_type="lore",
+            world_id=target_world_id,
+            title=str(w_lore["title"]),
+            content=str(w_lore["content"]),
+            keywords=tags,
+            embedding=vec,
+            conn=conn,
+        )
+
+    # Location-scoped tracked props (inserted after world lore_nodes so artifact lore_id remaps cleanly)
+    for loc in w_data.get("locations", []):
+        new_loc_id = id_remap.get(str(loc["id"]))
+        if not new_loc_id:
+            continue
+        for p_idx, raw_prop in enumerate(loc.get("props") or []):
+            prop_copy = dict(raw_prop)
+            orig_prop_lore = prop_copy.get("lore_id")
+            if orig_prop_lore:
+                resolved_prop_lore = id_remap.get(str(orig_prop_lore))
+                prop_copy["lore_id"] = resolved_prop_lore
+                if not resolved_prop_lore:
+                    prop_copy["flags"] = [
+                        f for f in (prop_copy.get("flags") or []) if f != "artifact"
+                    ]
+            prop_copy["id"] = f"prop_{uuid.uuid4().hex[:10]}"
+            validated_prop = LocationProp.model_validate(prop_copy)
+            conn.execute(
+                """
+                INSERT INTO location_props (
+                    id, world_id, location_id, campaign_id,
+                    name, note, flags_json, lore_id, is_hidden, sort_order
+                )
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    validated_prop.id,
+                    target_world_id,
+                    new_loc_id,
+                    validated_prop.name,
+                    validated_prop.note,
+                    json.dumps(validated_prop.flags),
+                    validated_prop.lore_id,
+                    1 if validated_prop.is_hidden else 0,
+                    p_idx,
+                ),
+            )
+
+    # Edges
+    for edge in w_data.get("edges", []):
+        from_id = id_remap.get(str(edge["from_location_id"]))
+        to_id = id_remap.get(str(edge["to_location_id"]))
+        if not from_id or not to_id:
+            continue
+        distance_meters = extract_edge_distance_meters(edge)
+        speed_modifier, travel_mode, obstacles, is_blocked, is_secret = (
+            extract_edge_link_fields(edge)
+        )
+        distance_mode, is_vertical = extract_edge_consistency_fields(edge)
+        conn.execute(
+            """
+            INSERT INTO location_edges (
+                id, world_id, from_location_id, to_location_id,
+                direction_label, compass_direction, distance_meters,
+                speed_modifier, travel_mode, obstacles_json,
+                is_blocked, is_secret, distance_mode, is_vertical,
+                created_at_turn_id, superseded_at_turn_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+            """,
+            (
+                f"edge_{uuid.uuid4().hex[:10]}",
+                target_world_id,
+                from_id,
+                to_id,
+                str(edge.get("direction_label") or "forward"),
+                edge.get("compass_direction"),
+                distance_meters,
+                speed_modifier,
+                travel_mode,
+                json.dumps(obstacles),
+                1 if is_blocked else 0,
+                1 if is_secret else 0,
+                distance_mode,
+                1 if is_vertical else 0,
+            ),
+        )
+
+    return id_remap
+
+
 def _seed_green_lie_world_for_user(
     repo: CantinaRepository,
     user_id: str,
@@ -484,7 +806,6 @@ def _seed_green_lie_world_for_user(
     w_data = _load_showcase_world_json()
     now = utc_now_iso()
     new_world_id = f"world_{uuid.uuid4().hex[:10]}"
-    id_remap: dict[str, str] = {}
 
     rules_json = WorldGlobalRules.model_validate(w_data["global_rules"]).model_dump_json()
 
@@ -494,9 +815,10 @@ def _seed_green_lie_world_for_user(
             """
             INSERT INTO worlds (
                 id, owner_id, name, global_rules_json, unsupported_fields_json,
-                seed_key, seed_version, seed_modified, pending_deletion, created_at
+                seed_key, seed_version, seed_modified, dismissed_seed_version,
+                pending_deletion, created_at
             )
-            VALUES (?, ?, ?, ?, '{}', ?, ?, 0, 0, ?)
+            VALUES (?, ?, ?, ?, '{}', ?, ?, 0, NULL, 0, ?)
             """,
             (
                 new_world_id,
@@ -504,334 +826,13 @@ def _seed_green_lie_world_for_user(
                 str(w_data["name"]),
                 rules_json,
                 SHOWCASE_WORLD_SEED_KEY,
-                SHOWCASE_SEED_VERSION,
+                SHOWCASE_WORLD_SEED_VERSION,
                 now,
             ),
         )
-
-        # Link shared public world media
-        for idx, m_item in enumerate(w_data.get("media", [])):
-            pub_media_id = media_id_map.get(str(m_item["id"]))
-            if not pub_media_id:
-                continue
-            conn.execute(
-                """
-                INSERT INTO world_media_links (world_id, media_id, sort_order, label_override, created_at)
-                VALUES (?, ?, ?, NULL, ?)
-                """,
-                (new_world_id, pub_media_id, int(m_item.get("sort_order", idx)), now),
-            )
-
-        # Insert containers ordered highest depth -> lowest so parents exist first
-        containers = sorted(
-            w_data.get("containers", []),
-            key=lambda c: (-int(c.get("depth", 1)), str(c.get("name", ""))),
+        id_remap = _populate_green_lie_world_rows(
+            conn, repo, new_world_id, media_id_map, w_data, now
         )
-        for cont in containers:
-            old_c_id = str(cont["id"])
-            new_c_id = f"cont_{uuid.uuid4().hex[:10]}"
-            id_remap[old_c_id] = new_c_id
-
-        for loc in w_data.get("locations", []):
-            old_loc_id = str(loc["id"])
-            id_remap[old_loc_id] = f"loc_{uuid.uuid4().hex[:10]}"
-
-        for cont in containers:
-            old_c_id = str(cont["id"])
-            new_c_id = id_remap[old_c_id]
-            parent_id = (
-                id_remap.get(str(cont["parent_container_id"]))
-                if cont.get("parent_container_id")
-                else None
-            )
-            img_id = (
-                media_id_map.get(str(cont["image_media_id"]))
-                if cont.get("image_media_id")
-                else None
-            )
-            ghost_coords_json = json.dumps(
-                remap_ghost_coords_dict(cont.get("ghost_coords") or {}, id_remap)
-            )
-            conn.execute(
-                """
-                INSERT INTO location_containers (
-                    id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                    description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, image_media_id, created_at
-                )
-                VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    new_c_id,
-                    new_world_id,
-                    parent_id,
-                    int(cont["depth"]),
-                    str(cont["name"]),
-                    str(cont.get("description") or ""),
-                    json.dumps(cont.get("environmental_tags") or []),
-                    cont.get("ui_x"),
-                    cont.get("ui_y"),
-                    ghost_coords_json,
-                    cont.get("icon"),
-                    img_id,
-                    now,
-                ),
-            )
-            for c_lore in cont.get("lore_nodes") or []:
-                old_cl_id = str(c_lore.get("id") or "")
-                new_cl_id = f"lore_{uuid.uuid4().hex[:10]}"
-                if old_cl_id:
-                    id_remap[old_cl_id] = new_cl_id
-                tags = list(c_lore.get("entity_tags") or [])
-                conn.execute(
-                    """
-                    INSERT INTO lore_nodes (
-                        id, world_id, location_id, container_id, campaign_id,
-                        title, category, content, entity_tags_json
-                    )
-                    VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?)
-                    """,
-                    (
-                        new_cl_id,
-                        new_world_id,
-                        new_c_id,
-                        str(c_lore["title"]),
-                        str(c_lore["category"]),
-                        str(c_lore["content"]),
-                        json.dumps(tags),
-                    ),
-                )
-                if str(c_lore["category"]) != "secret":
-                    vec_title, vec_keywords = _location_lore_vector_fields(
-                        str(cont["name"]), str(c_lore["title"]), tags
-                    )
-                    vec = _get_cached_showcase_embedding(
-                        f"cont_lore:{old_cl_id or new_cl_id}",
-                        combine_entry_text(vec_title, str(c_lore["content"]), vec_keywords),
-                    )
-                    repo.vector_store.upsert_entry(
-                        entry_id=f"lore_{new_cl_id}",
-                        source_type="container_lore",
-                        world_id=new_world_id,
-                        container_id=new_c_id,
-                        title=vec_title,
-                        content=str(c_lore["content"]),
-                        keywords=vec_keywords,
-                        embedding=vec,
-                        conn=conn,
-                    )
-
-        # Insert locations + location-scoped lore
-        for loc in w_data.get("locations", []):
-            old_loc_id = str(loc["id"])
-            new_loc_id = id_remap[old_loc_id]
-            cont_id = (
-                id_remap.get(str(loc["container_id"]))
-                if loc.get("container_id")
-                else None
-            )
-            img_id = (
-                media_id_map.get(str(loc["image_media_id"]))
-                if loc.get("image_media_id")
-                else None
-            )
-            raw_anchor_id = str(loc.get("anchor_location_id") or "").strip()
-            anchor_id = (
-                id_remap.get(raw_anchor_id)
-                if (raw_anchor_id and cont_id is not None)
-                else None
-            )
-            if anchor_id == new_loc_id:
-                anchor_id = None
-            conn.execute(
-                """
-                INSERT INTO location_nodes (
-                    id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
-                    is_entry_exit, name, summary, description, environmental_tags_json,
-                    is_starting_location, is_hub, starting_message, ui_x, ui_y, icon,
-                    anchor_location_id, image_media_id
-                )
-                VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    new_loc_id,
-                    new_world_id,
-                    cont_id,
-                    1 if loc.get("is_entry_exit") else 0,
-                    str(loc["name"]),
-                    str(loc.get("summary") or ""),
-                    str(loc.get("description") or ""),
-                    json.dumps(loc.get("environmental_tags") or []),
-                    1 if loc.get("is_starting_location") else 0,
-                    1 if loc.get("is_hub") else 0,
-                    str(loc.get("starting_message") or ""),
-                    loc.get("ui_x"),
-                    loc.get("ui_y"),
-                    loc.get("icon"),
-                    anchor_id,
-                    img_id,
-                ),
-            )
-            for l_lore in loc.get("lore_nodes") or []:
-                old_ll_id = str(l_lore.get("id") or "")
-                new_ll_id = f"lore_{uuid.uuid4().hex[:10]}"
-                if old_ll_id:
-                    id_remap[old_ll_id] = new_ll_id
-                tags = list(l_lore.get("entity_tags") or [])
-                conn.execute(
-                    """
-                    INSERT INTO lore_nodes (
-                        id, world_id, location_id, container_id, campaign_id,
-                        title, category, content, entity_tags_json
-                    )
-                    VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?)
-                    """,
-                    (
-                        new_ll_id,
-                        new_world_id,
-                        new_loc_id,
-                        str(l_lore["title"]),
-                        str(l_lore["category"]),
-                        str(l_lore["content"]),
-                        json.dumps(tags),
-                    ),
-                )
-                if str(l_lore["category"]) != "secret":
-                    vec_title, vec_keywords = _location_lore_vector_fields(
-                        str(loc["name"]), str(l_lore["title"]), tags
-                    )
-                    vec = _get_cached_showcase_embedding(
-                        f"loc_lore:{old_ll_id or new_ll_id}",
-                        combine_entry_text(vec_title, str(l_lore["content"]), vec_keywords),
-                    )
-                    repo.vector_store.upsert_entry(
-                        entry_id=f"lore_{new_ll_id}",
-                        source_type="location_lore",
-                        world_id=new_world_id,
-                        location_id=new_loc_id,
-                        title=vec_title,
-                        content=str(l_lore["content"]),
-                        keywords=vec_keywords,
-                        embedding=vec,
-                        conn=conn,
-                    )
-
-        # World-level lore nodes
-        for w_lore in w_data.get("lore_nodes", []):
-            old_wl_id = str(w_lore.get("id") or "")
-            new_wl_id = f"lore_{uuid.uuid4().hex[:10]}"
-            if old_wl_id:
-                id_remap[old_wl_id] = new_wl_id
-            tags = list(w_lore.get("entity_tags") or [])
-            conn.execute(
-                """
-                INSERT INTO lore_nodes (
-                    id, world_id, location_id, container_id, campaign_id,
-                    title, category, content, entity_tags_json
-                )
-                VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, ?)
-                """,
-                (
-                    new_wl_id,
-                    new_world_id,
-                    str(w_lore["title"]),
-                    str(w_lore["category"]),
-                    str(w_lore["content"]),
-                    json.dumps(tags),
-                ),
-            )
-            vec = _get_cached_showcase_embedding(
-                f"world_lore:{old_wl_id or new_wl_id}",
-                combine_entry_text(str(w_lore["title"]), str(w_lore["content"]), tags),
-            )
-            repo.vector_store.upsert_entry(
-                entry_id=f"lore_{new_wl_id}",
-                source_type="lore",
-                world_id=new_world_id,
-                title=str(w_lore["title"]),
-                content=str(w_lore["content"]),
-                keywords=tags,
-                embedding=vec,
-                conn=conn,
-            )
-
-        # Location-scoped tracked props (inserted after world lore_nodes so artifact lore_id remaps cleanly)
-        for loc in w_data.get("locations", []):
-            new_loc_id = id_remap.get(str(loc["id"]))
-            if not new_loc_id:
-                continue
-            for p_idx, raw_prop in enumerate(loc.get("props") or []):
-                prop_copy = dict(raw_prop)
-                orig_prop_lore = prop_copy.get("lore_id")
-                if orig_prop_lore:
-                    resolved_prop_lore = id_remap.get(str(orig_prop_lore))
-                    prop_copy["lore_id"] = resolved_prop_lore
-                    if not resolved_prop_lore:
-                        prop_copy["flags"] = [
-                            f for f in (prop_copy.get("flags") or []) if f != "artifact"
-                        ]
-                prop_copy["id"] = f"prop_{uuid.uuid4().hex[:10]}"
-                validated_prop = LocationProp.model_validate(prop_copy)
-                conn.execute(
-                    """
-                    INSERT INTO location_props (
-                        id, world_id, location_id, campaign_id,
-                        name, note, flags_json, lore_id, is_hidden, sort_order
-                    )
-                    VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        validated_prop.id,
-                        new_world_id,
-                        new_loc_id,
-                        validated_prop.name,
-                        validated_prop.note,
-                        json.dumps(validated_prop.flags),
-                        validated_prop.lore_id,
-                        1 if validated_prop.is_hidden else 0,
-                        p_idx,
-                    ),
-                )
-
-        # Edges
-        for edge in w_data.get("edges", []):
-            from_id = id_remap.get(str(edge["from_location_id"]))
-            to_id = id_remap.get(str(edge["to_location_id"]))
-            if not from_id or not to_id:
-                continue
-            distance_meters = extract_edge_distance_meters(edge)
-            speed_modifier, travel_mode, obstacles, is_blocked, is_secret = (
-                extract_edge_link_fields(edge)
-            )
-            distance_mode, is_vertical = extract_edge_consistency_fields(edge)
-            conn.execute(
-                """
-                INSERT INTO location_edges (
-                    id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, distance_meters,
-                    speed_modifier, travel_mode, obstacles_json,
-                    is_blocked, is_secret, distance_mode, is_vertical,
-                    created_at_turn_id, superseded_at_turn_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                """,
-                (
-                    f"edge_{uuid.uuid4().hex[:10]}",
-                    new_world_id,
-                    from_id,
-                    to_id,
-                    str(edge.get("direction_label") or "forward"),
-                    edge.get("compass_direction"),
-                    distance_meters,
-                    speed_modifier,
-                    travel_mode,
-                    json.dumps(obstacles),
-                    1 if is_blocked else 0,
-                    1 if is_secret else 0,
-                    distance_mode,
-                    1 if is_vertical else 0,
-                ),
-            )
-
         conn.commit()
     finally:
         conn.close()
@@ -878,15 +879,13 @@ def _resolve_existing_artifact_lore_id(
         conn.close()
 
 
-def _seed_yulia_halim_for_user(
+def _build_yulia_halim_draft(
     repo: CantinaRepository,
-    user_id: str,
     target_world_id: str | None,
     world_id_remap: dict[str, str],
-) -> str:
-    """Insert a private clone of Yulia Halim for user_id referencing public character media."""
+) -> tuple[CharacterWizardDraft, list[np.ndarray]]:
+    """Build the canonical CharacterWizardDraft and precomputed shard embeddings for Yulia Halim."""
     c_data = _load_showcase_character_json()
-    new_char_id = f"char_{uuid.uuid4().hex[:10]}"
 
     def _remap_items(raw_items: list[dict[str, Any]]) -> list[ItemInstance]:
         out: list[ItemInstance] = []
@@ -981,6 +980,18 @@ def _seed_yulia_halim_for_user(
         ],
         unsupported_fields=unsupported_fields,
     )
+    return draft, shard_embeddings
+
+
+def _seed_yulia_halim_for_user(
+    repo: CantinaRepository,
+    user_id: str,
+    target_world_id: str | None,
+    world_id_remap: dict[str, str],
+) -> str:
+    """Insert a private clone of Yulia Halim for user_id referencing public character media."""
+    new_char_id = f"char_{uuid.uuid4().hex[:10]}"
+    draft, shard_embeddings = _build_yulia_halim_draft(repo, target_world_id, world_id_remap)
 
     repo.create_character_from_draft(
         draft,
@@ -995,10 +1006,10 @@ def _seed_yulia_halim_for_user(
         conn.execute(
             """
             UPDATE characters
-            SET seed_key = ?, seed_version = ?, seed_modified = 0
+            SET seed_key = ?, seed_version = ?, seed_modified = 0, dismissed_seed_version = NULL
             WHERE id = ?
             """,
-            (SHOWCASE_CHARACTER_SEED_KEY, SHOWCASE_SEED_VERSION, new_char_id),
+            (SHOWCASE_CHARACTER_SEED_KEY, SHOWCASE_CHARACTER_SEED_VERSION, new_char_id),
         )
         conn.commit()
     finally:
