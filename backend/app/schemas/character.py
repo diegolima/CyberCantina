@@ -51,7 +51,7 @@ MemoryOrigin = Literal[
     "backstory", "clerk_ephemeral", "clerk_promoted", "compacted"
 ]
 MemorySignificance = Literal[
-    "trauma", "bonding", "betrayal", "revelation", "vow", "consolidated"
+    "trauma", "bonding", "betrayal", "revelation", "vow", "commitment", "consolidated"
 ]
 ItemFlag = Literal["permanent", "artifact"]
 VALID_ITEM_FLAGS: tuple[ItemFlag, ...] = ("permanent", "artifact")
@@ -276,6 +276,108 @@ class VoiceAnchor(BaseModel):
     )
 
 
+class CharacterObjective(BaseModel):
+    """Multi-scene strategic arc objective bridging core_drive and immediate active_want."""
+
+    summary: str = Field(
+        ...,
+        min_length=1,
+        max_length=240,
+        description="Concise 1-sentence multi-scene arc goal.",
+    )
+    deadline_cue: str | None = Field(
+        default=None,
+        max_length=80,
+        description="Optional short in-world time or condition anchor (e.g. 'at daybreak').",
+    )
+    set_at_turn_depth: int | None = Field(
+        default=None,
+        ge=0,
+        description="Branch turn depth when this objective was set (None for static seeds).",
+    )
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _clean_summary(cls, v: Any) -> str:
+        clean = sanitize_character_markup(str(v or ""), single_line=True)[:240].strip()
+        if not clean:
+            raise ValueError("Arc objective summary cannot be empty.")
+        return clean
+
+    @field_validator("deadline_cue", mode="before")
+    @classmethod
+    def _clean_deadline(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        clean = sanitize_character_markup(str(v), single_line=True)[:80].strip()
+        return clean or None
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "CharacterObjective | None":
+        """Coerce None | str | dict | CharacterObjective safely, returning None on blank payloads."""
+        if raw is None:
+            return None
+        if isinstance(raw, cls):
+            return raw
+        if isinstance(raw, str):
+            clean = sanitize_character_markup(raw, single_line=True)[:240].strip()
+            return cls(summary=clean) if clean else None
+        if isinstance(raw, dict):
+            raw_summary = sanitize_character_markup(str(raw.get("summary") or ""), single_line=True)[:240].strip()
+            if not raw_summary:
+                return None
+            raw_dl = raw.get("deadline_cue")
+            raw_depth = raw.get("set_at_turn_depth")
+            depth_val: int | None = None
+            if raw_depth is not None and raw_depth != "":
+                try:
+                    depth_val = max(0, int(raw_depth))
+                except (TypeError, ValueError):
+                    depth_val = None
+            return cls(
+                summary=raw_summary,
+                deadline_cue=raw_dl,
+                set_at_turn_depth=depth_val,
+            )
+        return None
+
+    def format_prompt_text(self) -> str:
+        """Format summary plus optional deadline cue for prompt or detail lines."""
+        if self.deadline_cue:
+            return f"{self.summary} [Deadline/Condition: {self.deadline_cue}]"
+        return self.summary
+
+
+class CharacterObjectiveOverrideRequest(BaseModel):
+    """GM Mode request payload to override or clear a character's active arc objective."""
+
+    summary: str | None = Field(default=None, max_length=240)
+    deadline_cue: str | None = Field(default=None, max_length=80)
+    clear: bool = Field(default=False)
+
+    @model_validator(mode="after")
+    def _normalize_override(self) -> "CharacterObjectiveOverrideRequest":
+        clean_sum = (
+            sanitize_character_markup(self.summary, single_line=True)[:240].strip()
+            if self.summary
+            else ""
+        )
+        clean_dl = (
+            sanitize_character_markup(self.deadline_cue, single_line=True)[:80].strip()
+            if self.deadline_cue
+            else None
+        )
+        if self.clear or not clean_sum:
+            self.clear = True
+            self.summary = None
+            self.deadline_cue = None
+        else:
+            self.clear = False
+            self.summary = clean_sum
+            self.deadline_cue = clean_dl or None
+        return self
+
+
 class BaselinePsyche(BaseModel):
     """Initial psychological and motivational profile for a character."""
 
@@ -296,6 +398,10 @@ class BaselinePsyche(BaseModel):
     core_fear: str = Field(description="What the character most dreads losing or facing.")
     default_want: str = Field(description="Immediate scene-level desire at the start of the story.")
     default_plan: str = Field(description="Initial actionable approach to achieving their want.")
+    default_objective: CharacterObjective | None = Field(
+        default=None,
+        description="Optional starting multi-scene arc objective (seeded into Turn 0 when present).",
+    )
     initial_worldview: WorldviewProfile = Field(
         default_factory=WorldviewProfile,
         description="Starting Layer 1 existential priors (benevolence, belonging, agency).",
@@ -304,6 +410,14 @@ class BaselinePsyche(BaseModel):
         default_factory=TemperamentConfig,
         description="Gottman & Kalman psychological temperament preset and dynamics tuning.",
     )
+
+    @field_validator("default_objective", mode="before")
+    @classmethod
+    def _coerce_default_objective(cls, val: Any) -> CharacterObjective | None:
+        obj = CharacterObjective.from_raw(val)
+        if obj is None:
+            return None
+        return obj.model_copy(update={"set_at_turn_depth": None})
 
 
 class MemoryShard(BaseModel):
@@ -676,6 +790,14 @@ class CharacterWizardPass2LLMOutput(BaseModel):
     default_plan: list[str] = Field(
         default_factory=list,
         description="2-3 concise tactical Turn 0 action steps (plain strings without bullet dashes; each element renders on its own line).",
+    )
+    default_objective_summary: str | None = Field(
+        default=None,
+        description="Optional 1-sentence multi-scene arc goal if the character starts mid-mission, else null.",
+    )
+    default_objective_deadline_cue: str | None = Field(
+        default=None,
+        description="Optional short in-world time/condition anchor for the arc objective (e.g. 'at daybreak'), else null.",
     )
     memory_shards: list[MemoryShard] = Field(
         default_factory=list,
@@ -1094,6 +1216,14 @@ class _CharacterFieldsBase(BaseModel):
             bp.core_fear = sanitize_character_markup(bp.core_fear, single_line=True)
             bp.default_want = sanitize_character_markup(bp.default_want, single_line=True)
             bp.default_plan = sanitize_character_markup(bp.default_plan)
+            if bp.default_objective is not None:
+                bp.default_objective = CharacterObjective.from_raw(
+                    {
+                        "summary": bp.default_objective.summary,
+                        "deadline_cue": bp.default_objective.deadline_cue,
+                        "set_at_turn_depth": None,
+                    }
+                )
 
         for ms in self.memory_shards:
             ms.title = sanitize_character_markup(ms.title, single_line=True)
@@ -1402,6 +1532,10 @@ class CharacterStateSnapshot(BaseModel):
     arousal: float = Field(default=0.4, ge=0.0, le=1.0)
     active_want: str
     active_plan: str
+    arc_objective: CharacterObjective | None = Field(
+        default=None,
+        description="Active multi-scene arc objective persisted per turn snapshot.",
+    )
     relationship_notes: dict[str, str] = Field(default_factory=dict)
     equipped: list[ItemInstance] = Field(default_factory=list)
     inventory: list[ItemInstance] = Field(default_factory=list)
@@ -1434,6 +1568,11 @@ class CharacterStateSnapshot(BaseModel):
     @classmethod
     def _coerce_physical_context(cls, val: Any) -> str:
         return sanitize_physical_context(val)
+
+    @field_validator("arc_objective", mode="before")
+    @classmethod
+    def _coerce_arc_objective(cls, val: Any) -> CharacterObjective | None:
+        return CharacterObjective.from_raw(val)
 
 
 class CharacterFeatureExtractionRequest(BaseModel):

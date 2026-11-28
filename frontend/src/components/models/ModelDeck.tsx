@@ -140,7 +140,7 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
   onZone2BudgetSharePct,
   recallBudgetProseTokens = 450,
   onRecallBudgetProseTokens,
-  recallBudgetCognitionTokens = 220,
+  recallBudgetCognitionTokens = 450,
   onRecallBudgetCognitionTokens,
   staleEmbeddingsCount = 0,
   reindexing = false,

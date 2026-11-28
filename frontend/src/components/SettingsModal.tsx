@@ -433,13 +433,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 min={60}
                 max={1000}
                 className="field-input"
-                value={form.memory_config.recall_budget_cognition_tokens ?? 220}
+                value={form.memory_config.recall_budget_cognition_tokens ?? 450}
                 onChange={(e) =>
                   setForm({
                     ...form,
                     memory_config: {
                       ...form.memory_config,
-                      recall_budget_cognition_tokens: Number(e.target.value) || 220,
+                      recall_budget_cognition_tokens: Number(e.target.value) || 450,
                     },
                   })
                 }

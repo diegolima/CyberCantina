@@ -338,6 +338,7 @@ const AppShell: React.FC = () => {
     handleOverrideLocation,
     handleOverrideCharacterLocation,
     handleOverrideCharacterPhysicalState,
+    handleOverrideCharacterObjective,
     handleOverridePlayerPhysicalState,
     handleCreateNpcParty,
     handleDisbandParty,
@@ -1401,6 +1402,7 @@ const AppShell: React.FC = () => {
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
           onOverrideCharacterLocation={handleOverrideCharacterLocation}
           onOverrideCharacterPhysicalState={handleOverrideCharacterPhysicalState}
+          onOverrideCharacterObjective={handleOverrideCharacterObjective}
           onOverridePlayerPhysicalState={handleOverridePlayerPhysicalState}
           onClose={() => {
             setCampaignWorldSheetTab(null);

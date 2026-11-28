@@ -48,6 +48,14 @@ from app.engine.context.lore_scope import (
     select_active_container_lore_for_turn,
     select_active_location_lore_for_turn,
 )
+from app.engine.context.zone2_episodic import format_arc_objective_prompt_line
+
+
+def _seed_turn0_arc_objective(character: CharacterRecord):
+    base_obj = getattr(character.baseline_psyche, "default_objective", None)
+    if base_obj is None:
+        return None
+    return base_obj.model_copy(update={"set_at_turn_depth": 0})
 
 def _project_snapshot_to_elapsed(
     snapshot: CharacterStateSnapshot,
@@ -95,6 +103,7 @@ def resolve_character_previous_state(
             arousal=character.baseline_psyche.arousal,
             active_want=character.baseline_psyche.default_want,
             active_plan=character.baseline_psyche.default_plan,
+            arc_objective=_seed_turn0_arc_objective(character),
             relationship_notes={"user": "Acquaintance / Uncertain trust"},
             equipped=list(character.equipped),
             inventory=list(character.inventory),
@@ -121,6 +130,7 @@ def resolve_character_previous_state(
             arousal=character.baseline_psyche.arousal,
             active_want=character.baseline_psyche.default_want,
             active_plan=character.baseline_psyche.default_plan,
+            arc_objective=_seed_turn0_arc_objective(character),
             relationship_notes={"user": "Acquaintance / Uncertain trust"},
             equipped=list(character.equipped),
             inventory=list(character.inventory),
@@ -147,6 +157,7 @@ def resolve_character_previous_state(
                         "arousal": hist_state.arousal,
                         "active_want": hist_state.active_want,
                         "active_plan": hist_state.active_plan,
+                        "arc_objective": hist_state.arc_objective,
                         "care_state": hist_state.care_state,
                     }
                 )
@@ -174,6 +185,7 @@ def resolve_character_previous_state(
                 "arousal": character.baseline_psyche.arousal,
                 "active_want": character.baseline_psyche.default_want,
                 "active_plan": character.baseline_psyche.default_plan,
+                "arc_objective": _seed_turn0_arc_objective(character),
                 "care_state": seeded_fallback,
             }
         )
@@ -362,8 +374,13 @@ def build_zone4_ephemeral_tail_frame(
                 phys_info = f" | Starting Physical State: {oc_phys}" if oc_phys else ""
                 eq_info = f" | Equipped: {', '.join(oc_eq_names)}" if oc_eq_names else ""
                 inv_info = f" | Carried: {', '.join(oc_inv_names)}" if oc_inv_names else ""
+                obj_info = (
+                    f" | Arc Objective: {oc_state.arc_objective.format_prompt_text()}"
+                    if (narrative_voice == "storyteller" and oc_state is not None and oc_state.arc_objective is not None)
+                    else ""
+                )
                 other_lines.append(
-                    f"    - {oc.name} ({oc.tagline}){demeanor_info}{player_stance}{speaker_stance}{app_info}{phys_info}{eq_info}{inv_info}"
+                    f"    - {oc.name} ({oc.tagline}){demeanor_info}{player_stance}{speaker_stance}{app_info}{phys_info}{eq_info}{inv_info}{obj_info}"
                 )
             co_present_section = (
                 "\n  <other_characters_in_room>\n"
@@ -466,9 +483,16 @@ def build_zone4_ephemeral_tail_frame(
             character_state.physical_stance, character_state.physical_context
         )
         speaker_phys_line = f"    Starting Physical State: {speaker_phys}\n" if speaker_phys else ""
+        arc_obj_zone4_line = format_arc_objective_prompt_line(
+            character_state.arc_objective,
+            world_timestamp=world_snapshot.world_timestamp,
+            temperament_archetype=character.baseline_psyche.temperament.archetype,
+            for_cognition=False,
+        )
         mind_state_section = (
             f"{indented_affective}\n"
             f"  <character_equipment_and_goals character=\"{character.name}\">\n"
+            f"{arc_obj_zone4_line}"
             f"    Previous Want: {character_state.active_want}\n"
             f"    Previous Plan: {character_state.active_plan}\n"
             f"{speaker_phys_line}"

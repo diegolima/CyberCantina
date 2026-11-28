@@ -99,8 +99,11 @@ from app.engine.context.zone1_static import (  # noqa: F401
 from app.engine.context.zone2_episodic import (  # noqa: F401
     TurnContextBundle,
     _chunk_synopsis_fallback,
+    build_cognition_recent_turns_tail,
+    build_cognition_witnessed_synopsis_strip,
     render_zone2_lod_episodic_summary,
     build_zone2_episodic_summary,
+    format_arc_objective_prompt_line,
     pack_recalled_items_to_budget,
     elevate_compacted_episode_turns,
 )
@@ -151,8 +154,11 @@ __all__ = [
     "build_zone1_ensemble_system_prompt",
     "TurnContextBundle",
     "_chunk_synopsis_fallback",
+    "build_cognition_recent_turns_tail",
+    "build_cognition_witnessed_synopsis_strip",
     "render_zone2_lod_episodic_summary",
     "build_zone2_episodic_summary",
+    "format_arc_objective_prompt_line",
     "pack_recalled_items_to_budget",
     "elevate_compacted_episode_turns",
     "_project_snapshot_to_elapsed",

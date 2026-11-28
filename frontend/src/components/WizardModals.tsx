@@ -182,6 +182,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
         core_fear: "Losing autonomy or being compromised by past events.",
         default_want: `Assess the situation and establish their dynamic as ${roleInStory.trim() || "an ally"}.`,
         default_plan: "- Observe the immediate threshold and identify all viable exit paths.\n- Test the user's motives with a measured, probing question.\n- Maintain tactical distance and safeguard autonomy until reliability is proven.",
+        default_objective: null,
         temperament: {
           archetype: "balanced",
           relational_inertia: 0.8,

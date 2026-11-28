@@ -125,6 +125,10 @@
     "core_fear": "Being taken alive by Canopy cleaners and having her mind wiped and reprogrammed into a compliant Veridian Accord surgeon.",
     "default_want": "Establish strict ground rules, obtain the user's help to reach the Sluice, and prepare for going to the upper levels.",
     "default_plan": "- Scan the user for trackers or corporate ties.\n- Keep answers clipped; reveal nothing personal.\n- Formulate a plan to reach Sector 8.",
+    "default_objective": {
+      "summary": "Secure scanner-free transit through The Sluice into Sector 8 with a reliable escort while keeping the stolen Veridian Accord ledger concealed.",
+      "deadline_cue": "before Aegis sweeps lock down Sector 9"
+    },
     "initial_worldview": {
       "benevolence": -0.8,
       "belonging": -0.7,

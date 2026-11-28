@@ -7,7 +7,12 @@ import type {
   RelationalEventSpec,
   ThreatLevel,
 } from "./affective";
-import type { CharacterRecord, CharacterStateSnapshot, CognitionBlock } from "./character";
+import type {
+  CharacterObjective,
+  CharacterRecord,
+  CharacterStateSnapshot,
+  CognitionBlock,
+} from "./character";
 import type {
   CharacterChoiceSet,
   ChoiceComplianceOutcome,
@@ -135,10 +140,25 @@ export interface ExtractedCharacterMemory {
   character_id: string;
   title: string;
   content: string;
-  significance: "trauma" | "bonding" | "betrayal" | "revelation" | "vow";
+  significance:
+    | "trauma"
+    | "bonding"
+    | "betrayal"
+    | "revelation"
+    | "vow"
+    | "commitment";
   keywords: string[];
   emotional_weight: number;
   supersedes_memory_id?: string | null;
+}
+
+export type ObjectiveAction = "keep" | "set" | "refine" | "complete" | "abandon";
+
+export interface ObjectiveTransitionRecord {
+  action: ObjectiveAction;
+  previous_objective?: CharacterObjective | null;
+  new_objective?: CharacterObjective | null;
+  disruption_triggered?: boolean;
 }
 
 export type AgentDispatchMode = "sequential" | "parallel";
@@ -156,6 +176,9 @@ export interface CharacterAgentDelta {
   valence_delta: number;
   arousal_delta: number;
   updated_want?: string | null;
+  objective_action?: ObjectiveAction;
+  objective_summary?: string | null;
+  objective_deadline_cue?: string | null;
   stance_updates: Record<string, string>;
   items_equipped: string[];
   items_unequipped: string[];
@@ -252,6 +275,7 @@ export interface PostTurnStateDelta {
   previous_player_physical_stance?: PhysicalStance | null;
   previous_player_physical_context?: string | null;
   physical_state_reset_reasons?: Record<string, PhysicalStateResetReason>;
+  objective_transitions?: Record<string, ObjectiveTransitionRecord>;
 }
 
 export type Phase5AgentKind = "world_clerk" | "character";

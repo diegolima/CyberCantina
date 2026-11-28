@@ -52,7 +52,7 @@ const BASE_BEHAVIOR: ProfileBehaviorValues = {
   lodImportanceBonus: 2,
   zone2BudgetSharePct: 45,
   recallBudgetProseTokens: 450,
-  recallBudgetCognitionTokens: 220,
+  recallBudgetCognitionTokens: 450,
   maxSceneFlags: 10,
   agentDispatchMode: "sequential",
   personaDisclosureMode: "llm_intent",

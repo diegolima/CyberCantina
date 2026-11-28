@@ -371,7 +371,7 @@ class ProfileModelSettingsResponse(BaseModel):
     effective_lod_importance_bonus: int = 2
     effective_zone2_budget_share_pct: int = 45
     effective_recall_budget_prose_tokens: int = 450
-    effective_recall_budget_cognition_tokens: int = 220
+    effective_recall_budget_cognition_tokens: int = 450
     effective_gm_model_role: Literal["primary", "clerk"] = "primary"
     effective_gm_temperature: float = 0.5
     effective_gm_max_tokens: int = 1024
@@ -406,7 +406,7 @@ class ProfileModelSettingsResponse(BaseModel):
     default_lod_importance_bonus: int = 2
     default_zone2_budget_share_pct: int = 45
     default_recall_budget_prose_tokens: int = 450
-    default_recall_budget_cognition_tokens: int = 220
+    default_recall_budget_cognition_tokens: int = 450
     default_gm_model_role: Literal["primary", "clerk"] = "primary"
     default_gm_temperature: float = 0.5
     default_gm_max_tokens: int = 1024

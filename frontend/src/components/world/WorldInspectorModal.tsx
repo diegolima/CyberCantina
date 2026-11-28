@@ -25,6 +25,7 @@ import {
 import type {
   AppSettings,
   CampaignWorldSettings,
+  CharacterObjectiveOverridePayload,
   CodexReturnTarget,
   ItemEquipActionPayload,
   LocationContainer,
@@ -152,6 +153,10 @@ interface WorldInspectorModalProps {
     characterId: string,
     payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
+  onOverrideCharacterObjective?: (
+    characterId: string,
+    payload: CharacterObjectiveOverridePayload
+  ) => Promise<void> | void;
   onOverridePlayerPhysicalState?: (
     payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
@@ -197,6 +202,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   onUpdateCampaignMemories,
   onOverrideCharacterLocation,
   onOverrideCharacterPhysicalState,
+  onOverrideCharacterObjective,
   onOverridePlayerPhysicalState,
   onRequestSeedUpdate,
 }) => {
@@ -1396,6 +1402,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             onSaveMemories={onUpdateCampaignMemories}
             onRelocateCharacter={onOverrideCharacterLocation}
             onOverrideCharacterPhysicalState={onOverrideCharacterPhysicalState}
+            onOverrideCharacterObjective={onOverrideCharacterObjective}
             onOverridePlayerPhysicalState={onOverridePlayerPhysicalState}
             onUpdateLoreNodes={(updater) => {
               setLoreNodes(updater);

@@ -110,6 +110,7 @@ from app.routers.campaign_routes.crud_and_state import (  # noqa: F401
     checkout_campaign_branch,
     override_campaign_location,
     override_campaign_character_location,
+    override_campaign_character_objective,
     create_campaign_npc_party,
     delete_campaign_party,
     update_campaign_world_settings,

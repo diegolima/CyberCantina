@@ -457,6 +457,7 @@ CREATE TABLE IF NOT EXISTS character_states (
     affective_state_json TEXT NOT NULL DEFAULT '{}',
     physical_stance TEXT NOT NULL DEFAULT 'unspecified',
     physical_context TEXT NOT NULL DEFAULT '',
+    arc_objective_json TEXT NULL,
     PRIMARY KEY (turn_id, character_id)
 );
 

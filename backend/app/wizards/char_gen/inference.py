@@ -521,6 +521,7 @@ def _fallback_character_expansion(
             core_fear="Being compromised by past mistakes or losing the few allies they trust.",
             default_want=f"Assess the user's intentions and establish their dynamic as {seed.role_in_story}.",
             default_plan=default_plan,
+            default_objective=None,
             initial_worldview=inferred_wv,
             temperament=inferred_temp,
         ),

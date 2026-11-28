@@ -199,10 +199,10 @@ export function extractDraftFromProfileSettings(
         data.default_recall_budget_prose_tokens ??
         450),
     recallBudgetCognitionTokens: useDefaults
-      ? (data.default_recall_budget_cognition_tokens ?? 220)
+      ? (data.default_recall_budget_cognition_tokens ?? 450)
       : (data.user_recall_budget_cognition_tokens ??
         data.default_recall_budget_cognition_tokens ??
-        220),
+        450),
     maxSceneFlags: useDefaults
       ? (data.default_max_scene_flags ?? 10)
       : (data.user_max_scene_flags ?? data.default_max_scene_flags ?? 10),

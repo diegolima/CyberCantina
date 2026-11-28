@@ -83,7 +83,7 @@ class EffectiveModels:
     lod_importance_bonus: int = 2
     zone2_budget_share_pct: int = 45
     recall_budget_prose_tokens: int = 450
-    recall_budget_cognition_tokens: int = 220
+    recall_budget_cognition_tokens: int = 450
     gm_model_role: Literal["primary", "clerk"] = "primary"
     gm_temperature: float = 0.5
     gm_max_tokens: int = 1024

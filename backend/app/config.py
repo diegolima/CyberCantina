@@ -168,7 +168,7 @@ class MemoryTierConfig(BaseModel):
         description="Token budget for Zone 4 mixed full+short recalled memories in Phase 4 Actor Prose.",
     )
     recall_budget_cognition_tokens: int = Field(
-        default=220,
+        default=450,
         ge=60,
         le=1000,
         description="Token budget for mixed full+short recalled memories in Phase 3 Character Cognition.",

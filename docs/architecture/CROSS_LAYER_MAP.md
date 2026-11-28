@@ -34,6 +34,7 @@
 | `POST` | `/api/campaigns/{campaign_id}/characters` | `app.routers.campaign_routes.crud_and_state.add_campaign_character` | `CampaignStateBundle` | *(backend-only / test / SSE)* |
 | `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/location-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_character_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/memories` | `app.routers.campaign_routes.crud_and_state.update_campaign_character_memories` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/objective-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_character_objective` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/physical-state-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_character_physical_state` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/checkout` | `app.routers.campaign_routes.crud_and_state.checkout_campaign_branch` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/containers/{container_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_container_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |

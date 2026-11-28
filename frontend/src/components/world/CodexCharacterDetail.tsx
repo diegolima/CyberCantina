@@ -20,6 +20,7 @@ import {
   Users,
 } from "lucide-react";
 import {
+  CharacterObjectiveOverridePayload,
   CodexReturnTarget,
   GalleryImage,
   ItemEquipActionPayload,
@@ -83,6 +84,11 @@ interface CodexCharacterDetailProps {
     characterId: string,
     payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
+  onOverrideCharacterObjective?: (
+    characterId: string,
+    payload: CharacterObjectiveOverridePayload
+  ) => Promise<void> | void;
+  unlockLore?: boolean;
   onOverridePlayerPhysicalState?: (
     payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
@@ -120,6 +126,8 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
   onSaveMemories,
   onRelocateCharacter,
   onOverrideCharacterPhysicalState,
+  onOverrideCharacterObjective,
+  unlockLore = false,
   onOverridePlayerPhysicalState,
   onOpenMechanicsHelp,
 }) => {
@@ -1131,6 +1139,11 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
               onOverridePhysicalState={
                 onOverrideCharacterPhysicalState
                   ? (payload) => onOverrideCharacterPhysicalState(record.id, payload)
+                  : undefined
+              }
+              onOverrideObjective={
+                unlockLore && onOverrideCharacterObjective
+                  ? (payload) => onOverrideCharacterObjective(record.id, payload)
                   : undefined
               }
               characterNameMap={characterNameMap}

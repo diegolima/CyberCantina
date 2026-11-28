@@ -257,7 +257,7 @@ export const AdminModelsTab: React.FC<AdminModelsTabProps> = ({
                         memory_config: { ...appSettingsForm.memory_config, recall_budget_prose_tokens: v },
                       })
                     }
-                    recallBudgetCognitionTokens={appSettingsForm.memory_config.recall_budget_cognition_tokens ?? 220}
+                    recallBudgetCognitionTokens={appSettingsForm.memory_config.recall_budget_cognition_tokens ?? 450}
                     onRecallBudgetCognitionTokens={(v) =>
                       setAppSettingsForm({
                         ...appSettingsForm,

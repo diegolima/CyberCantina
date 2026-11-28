@@ -69,7 +69,7 @@ const INITIAL_DRAFT: ProfileModelDraft = {
   lodImportanceBonus: 2,
   zone2BudgetSharePct: 45,
   recallBudgetProseTokens: 450,
-  recallBudgetCognitionTokens: 220,
+  recallBudgetCognitionTokens: 450,
   maxSceneFlags: 10,
   agentDispatchMode: "sequential",
   personaDisclosureMode: "llm_intent",
@@ -88,7 +88,7 @@ const FALLBACK_BEHAVIOR_DEFAULTS: ProfileBehaviorValues = {
   lodImportanceBonus: 2,
   zone2BudgetSharePct: 45,
   recallBudgetProseTokens: 450,
-  recallBudgetCognitionTokens: 220,
+  recallBudgetCognitionTokens: 450,
   maxSceneFlags: 10,
   agentDispatchMode: "sequential",
   personaDisclosureMode: "llm_intent",
@@ -111,7 +111,7 @@ function getBehaviorDefaultsFromSettings(
     zone2BudgetSharePct: settings.default_zone2_budget_share_pct ?? 45,
     recallBudgetProseTokens: settings.default_recall_budget_prose_tokens ?? 450,
     recallBudgetCognitionTokens:
-      settings.default_recall_budget_cognition_tokens ?? 220,
+      settings.default_recall_budget_cognition_tokens ?? 450,
     maxSceneFlags: settings.default_max_scene_flags ?? 10,
     agentDispatchMode: settings.default_agent_dispatch_mode ?? "sequential",
     personaDisclosureMode:

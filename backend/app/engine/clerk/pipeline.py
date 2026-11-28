@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import uuid
 
@@ -70,10 +71,12 @@ from app.schemas.affective import (
     VisibilityScope,
 )
 from app.schemas.character import (
+    CharacterObjective,
     CharacterRecord,
     CharacterStateSnapshot,
     MemoryShard,
     normalize_item_key,
+    sanitize_character_markup,
 )
 from app.schemas.party import USER_PARTY_MEMBER_ID
 from app.schemas.persona import (
@@ -96,6 +99,7 @@ from app.schemas.turn import (
     EpisodicChunkRecord,
     ImprovisedLinkSpec,
     MajorEventRecord,
+    ObjectiveTransitionRecord,
     PersonaGossipEvent,
     Phase4ProgressCallback,
     Phase4ProgressEvent,
@@ -182,6 +186,165 @@ def should_fast_path_passive_bystander(
     if character.id.lower() in combined_low:
         return False
     return True
+
+
+def resolve_post_turn_arc_objective(
+    prev_objective: CharacterObjective | None,
+    delta: CharacterAgentDelta,
+    *,
+    turn_depth: int,
+    disruption_triggered: bool,
+) -> tuple[CharacterObjective | None, ObjectiveTransitionRecord | None, CharacterAgentDelta]:
+    """Resolve post-turn Arc Objective transitions with deterministic anti-churn guardrails."""
+    action = getattr(delta, "objective_action", "keep") or "keep"
+    raw_sum = getattr(delta, "objective_summary", None)
+    raw_dl = getattr(delta, "objective_deadline_cue", None)
+    clean_sum = (
+        sanitize_character_markup(raw_sum, single_line=True)[:240].strip()
+        if isinstance(raw_sum, str) and raw_sum.strip()
+        else ""
+    )
+    clean_dl = (
+        sanitize_character_markup(raw_dl, single_line=True)[:80].strip()
+        if isinstance(raw_dl, str) and raw_dl.strip()
+        else None
+    )
+
+    if action == "keep":
+        return prev_objective, None, delta
+
+    if action == "set":
+        if not clean_sum or (prev_objective is not None and not disruption_triggered):
+            return (
+                prev_objective,
+                None,
+                delta.model_copy(
+                    update={
+                        "objective_action": "keep",
+                        "objective_summary": None,
+                        "objective_deadline_cue": None,
+                    }
+                ),
+            )
+        new_obj = CharacterObjective(
+            summary=clean_sum,
+            deadline_cue=clean_dl,
+            set_at_turn_depth=max(0, int(turn_depth)),
+        )
+        return (
+            new_obj,
+            ObjectiveTransitionRecord(
+                action="set",
+                previous_objective=prev_objective,
+                new_objective=new_obj,
+                disruption_triggered=disruption_triggered,
+            ),
+            delta.model_copy(
+                update={
+                    "objective_action": "set",
+                    "objective_summary": new_obj.summary,
+                    "objective_deadline_cue": new_obj.deadline_cue,
+                }
+            ),
+        )
+
+    if action == "refine":
+        if prev_objective is None or not clean_sum:
+            return (
+                prev_objective,
+                None,
+                delta.model_copy(
+                    update={
+                        "objective_action": "keep",
+                        "objective_summary": None,
+                        "objective_deadline_cue": None,
+                    }
+                ),
+            )
+        eff_dl = clean_dl if clean_dl is not None else prev_objective.deadline_cue
+        if clean_sum == prev_objective.summary and eff_dl == prev_objective.deadline_cue:
+            return (
+                prev_objective,
+                None,
+                delta.model_copy(
+                    update={
+                        "objective_action": "keep",
+                        "objective_summary": None,
+                        "objective_deadline_cue": None,
+                    }
+                ),
+            )
+        new_obj = CharacterObjective(
+            summary=clean_sum,
+            deadline_cue=eff_dl,
+            set_at_turn_depth=prev_objective.set_at_turn_depth,
+        )
+        return (
+            new_obj,
+            ObjectiveTransitionRecord(
+                action="refine",
+                previous_objective=prev_objective,
+                new_objective=new_obj,
+                disruption_triggered=disruption_triggered,
+            ),
+            delta.model_copy(
+                update={
+                    "objective_action": "refine",
+                    "objective_summary": new_obj.summary,
+                    "objective_deadline_cue": new_obj.deadline_cue,
+                }
+            ),
+        )
+
+    # action in ("complete", "abandon")
+    if prev_objective is None:
+        return (
+            None,
+            None,
+            delta.model_copy(
+                update={
+                    "objective_action": "keep",
+                    "objective_summary": None,
+                    "objective_deadline_cue": None,
+                }
+            ),
+        )
+    return (
+        None,
+        ObjectiveTransitionRecord(
+            action=action,
+            previous_objective=prev_objective,
+            new_objective=None,
+            disruption_triggered=disruption_triggered,
+        ),
+        delta.model_copy(
+            update={
+                "objective_action": action,
+                "objective_summary": None,
+                "objective_deadline_cue": None,
+            }
+        ),
+    )
+
+
+def _is_character_objective_disrupted(
+    delta: CharacterAgentDelta,
+    *,
+    major_event_fired: bool,
+) -> bool:
+    """Return True when a Major Event or severe CARE shock justifies pivoting an active Arc Objective."""
+    if major_event_fired:
+        return True
+    if any(m.significance in ("trauma", "betrayal") for m in (delta.new_memories or [])):
+        return True
+    if any(ev.grievance_shift == "grave_wrong" for ev in (delta.relational_events or [])):
+        return True
+    if delta.goal_congruence == "strong_neg" and (
+        delta.scene_threat in ("high", "critical")
+        or delta.scene_surprise in ("high", "extreme")
+    ):
+        return True
+    return False
 
 
 def _resolve_character_agent_fn():
@@ -546,7 +709,48 @@ async def run_phase5_post_turn_clerk(
             )
         return w_delta
 
-    async def _run_single_char_agent(ch: CharacterRecord) -> tuple[str, CharacterAgentDelta]:
+    fast_pathed_char_ids: set[str] = set()
+
+    async def _invoke_char_agent(
+        ch: CharacterRecord,
+        *,
+        disruption_note: str | None = None,
+    ) -> CharacterAgentDelta:
+        agent_fn = _resolve_character_agent_fn()
+        kwargs: dict[str, object] = {
+            "character": ch,
+            "prev_state": prev_states_by_char[ch.id],
+            "completed_turn": completed_turn,
+            "active_location": active_location,
+            "neighbors": neighbors,
+            "present_characters": scene_characters,
+            "all_participants": known_participants,
+            "active_shards": active_shards_by_char.get(ch.id, []),
+            "profile": clerk_prof,
+            "prompt_template": character_post_turn_prompt_template,
+            "extracted_memories_fn": _extract_heuristic_character_memories,
+            "persona_name": eff_persona_name,
+            "decomposed_message": decomposed_msg,
+            "campaign_elapsed_minutes": prior_elapsed,
+        }
+        try:
+            sig = inspect.signature(agent_fn)
+            has_varkw = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+            if has_varkw or "world_time_label" in sig.parameters:
+                kwargs["world_time_label"] = current_time_str
+            if has_varkw or "disruption_note" in sig.parameters:
+                kwargs["disruption_note"] = disruption_note
+        except (TypeError, ValueError):
+            pass
+        return await agent_fn(**kwargs)
+
+    async def _run_single_char_agent(
+        ch: CharacterRecord,
+        *,
+        disruption_note: str | None = None,
+    ) -> tuple[str, CharacterAgentDelta]:
         if on_progress:
             await on_progress(
                 Phase4ProgressEvent(
@@ -559,34 +763,20 @@ async def run_phase5_post_turn_clerk(
             )
         try:
             has_char_roll = resolve_roll_for_character(completed_turn.pre_turn, ch.id) is not None
-            if should_fast_path_passive_bystander(
+            if not disruption_note and should_fast_path_passive_bystander(
                 ch,
                 completed_turn=completed_turn,
                 decomposed_message=decomposed_msg,
                 has_mechanics_roll=has_char_roll,
                 player_moved_location=player_moved_intent,
             ):
+                fast_pathed_char_ids.add(ch.id)
                 c_delta = CharacterAgentDelta(
                     mood_label=prev_states_by_char[ch.id].mood_label,
                     location_transition="stay_here",
                 )
             else:
-                c_delta = await _resolve_character_agent_fn()(
-                    character=ch,
-                    prev_state=prev_states_by_char[ch.id],
-                    completed_turn=completed_turn,
-                    active_location=active_location,
-                    neighbors=neighbors,
-                    present_characters=scene_characters,
-                    all_participants=known_participants,
-                    active_shards=active_shards_by_char.get(ch.id, []),
-                    profile=clerk_prof,
-                    prompt_template=character_post_turn_prompt_template,
-                    extracted_memories_fn=_extract_heuristic_character_memories,
-                    persona_name=eff_persona_name,
-                    decomposed_message=decomposed_msg,
-                    campaign_elapsed_minutes=prior_elapsed,
-                )
+                c_delta = await _invoke_char_agent(ch, disruption_note=disruption_note)
             if on_progress:
                 await on_progress(
                     Phase4ProgressEvent(
@@ -683,12 +873,25 @@ async def run_phase5_post_turn_clerk(
             world_delta = gathered[0]
             for cid, c_delta in gathered[1:]:
                 char_deltas[cid] = c_delta
+        if world_delta.major_event is not None and fast_pathed_char_ids:
+            me_note = f"Major Event ({world_delta.major_event.scope}): {world_delta.major_event.summary}"
+            wake_chars = [ch for ch in scene_characters if ch.id in fast_pathed_char_ids]
+            woken = await asyncio.gather(
+                *(_run_single_char_agent(ch, disruption_note=me_note) for ch in wake_chars)
+            )
+            for cid, c_delta in woken:
+                char_deltas[cid] = c_delta
     else:
         # Sequential dispatch: strictly 1 LLM request in-flight at a time for single-GPU local servers.
         # Run World Clerk first, then character agents, then summarization.
         world_delta = await _compute_world_delta()
+        seq_disruption = (
+            f"Major Event ({world_delta.major_event.scope}): {world_delta.major_event.summary}"
+            if world_delta.major_event is not None
+            else None
+        )
         for ch in scene_characters:
-            cid, c_delta = await _run_single_char_agent(ch)
+            cid, c_delta = await _run_single_char_agent(ch, disruption_note=seq_disruption)
             char_deltas[cid] = c_delta
         if needs_chunk_summary:
             summary_output = await summarize_turn_chunk_structured(
@@ -1308,6 +1511,7 @@ async def run_phase5_post_turn_clerk(
     # 4. Reconcile CharacterStateSnapshots via CARE Solver + Witness Coupling (conserving ItemInstances)
     updated_states_by_char: dict[str, CharacterStateSnapshot] = {}
     physical_reset_reasons: dict[str, PhysicalStateResetReason] = {}
+    objective_transitions: dict[str, ObjectiveTransitionRecord] = {}
     if is_narrator_turn:
         for ch in scene_characters:
             prev_st = prev_states_by_char[ch.id]
@@ -1346,6 +1550,7 @@ async def run_phase5_post_turn_clerk(
                 arousal=prev_st.arousal,
                 active_want=prev_st.active_want,
                 active_plan=prev_st.active_plan,
+                arc_objective=prev_st.arc_objective,
                 relationship_notes=dict(prev_st.relationship_notes),
                 equipped=list(prev_st.equipped),
                 inventory=list(prev_st.inventory),
@@ -1445,6 +1650,20 @@ async def run_phase5_post_turn_clerk(
                 }
             )
 
+            disruption_triggered = _is_character_objective_disrupted(
+                char_deltas[ch.id],
+                major_event_fired=(world_delta.major_event is not None),
+            )
+            next_arc_objective, obj_transition, cleaned_obj_delta = resolve_post_turn_arc_objective(
+                prev_st.arc_objective,
+                char_deltas[ch.id],
+                turn_depth=completed_turn.depth_index,
+                disruption_triggered=disruption_triggered,
+            )
+            char_deltas[ch.id] = cleaned_obj_delta
+            if obj_transition is not None:
+                objective_transitions[ch.id] = obj_transition
+
             base_snaps_by_char[ch.id] = CharacterStateSnapshot(
                 turn_id=completed_turn.id,
                 character_id=ch.id,
@@ -1454,6 +1673,7 @@ async def run_phase5_post_turn_clerk(
                 arousal=prev_st.arousal,
                 active_want=new_want,
                 active_plan=new_plan,
+                arc_objective=next_arc_objective,
                 relationship_notes=merged_rel,
                 equipped=new_equipped,
                 inventory=new_inventory,
@@ -1869,6 +2089,7 @@ async def run_phase5_post_turn_clerk(
         previous_player_physical_stance=prev_player_stance,
         previous_player_physical_context=prev_player_context,
         physical_state_reset_reasons=physical_reset_reasons,
+        objective_transitions=objective_transitions,
     )
 
     primary_char_state = updated_states_by_char.get(

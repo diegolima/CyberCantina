@@ -50,6 +50,7 @@ from app.engine.clerk.heuristics import (
     heuristic_world_post_turn_delta,
 )
 from app.engine.clerk.pipeline import (
+    resolve_post_turn_arc_objective,
     should_fast_path_passive_bystander,
     run_phase5_post_turn_clerk,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "heuristic_post_turn_delta",
     "_heuristic_spatial_and_inventory_delta",
     "heuristic_world_post_turn_delta",
+    "resolve_post_turn_arc_objective",
     "should_fast_path_passive_bystander",
     "run_phase5_post_turn_clerk",
 ]

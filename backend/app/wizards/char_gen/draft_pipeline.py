@@ -17,6 +17,7 @@ from app.prompts import (
 from app.schemas.affective import infer_temperament_and_worldview_from_text
 from app.schemas.character import (
     BaselinePsyche,
+    CharacterObjective,
     CharacterWizardDraft,
     CharacterWizardLLMOutput,
     CharacterWizardPass1LLMOutput,
@@ -334,6 +335,23 @@ async def generate_character_draft(
         default_plan = normalize_bullet_plan(
             [sanitize_character_markup(s) for s in p2_out.default_plan]
         ) or fallback.baseline_psyche.default_plan
+        raw_obj_summary = sanitize_character_markup(
+            getattr(p2_out, "default_objective_summary", None) or "",
+            single_line=True,
+        )[:240].strip()
+        raw_obj_deadline = sanitize_character_markup(
+            getattr(p2_out, "default_objective_deadline_cue", None) or "",
+            single_line=True,
+        )[:80].strip()
+        default_objective = (
+            CharacterObjective(
+                summary=raw_obj_summary,
+                deadline_cue=raw_obj_deadline or None,
+                set_at_turn_depth=None,
+            )
+            if raw_obj_summary
+            else None
+        )
 
         memory_shards = p2_out.memory_shards or fallback.memory_shards
         for ms in memory_shards:
@@ -438,6 +456,7 @@ async def generate_character_draft(
                 core_fear=core_fear,
                 default_want=default_want,
                 default_plan=default_plan,
+                default_objective=default_objective,
                 initial_worldview=inferred_wv,
                 temperament=inferred_temp,
             ),

@@ -426,4 +426,4 @@ def select_cognition_recalled_items(
     if not prioritized:
         return []
 
-    return pack_recalled_items_to_budget(prioritized, eff_budget)
+    return pack_recalled_items_to_budget(prioritized, eff_budget, prefer_short_first=True)

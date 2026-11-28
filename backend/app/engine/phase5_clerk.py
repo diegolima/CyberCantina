@@ -133,6 +133,7 @@ from app.engine.clerk.heuristics import (  # noqa: F401
     heuristic_world_post_turn_delta,
 )
 from app.engine.clerk.pipeline import (  # noqa: F401
+    resolve_post_turn_arc_objective,
     should_fast_path_passive_bystander,
     run_phase5_post_turn_clerk,
 )

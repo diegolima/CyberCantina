@@ -11,7 +11,9 @@ from app.engine.mentions import (
     DecomposedUserMessage,
     filter_user_message_for_character,
 )
+from app.engine.world_clock import describe_world_timestamp
 from app.schemas.character import (
+    CharacterObjective,
     CharacterRecord,
     CharacterStateSnapshot,
 )
@@ -203,12 +205,15 @@ def build_zone2_episodic_summary(
 def pack_recalled_items_to_budget(
     items: Sequence[RecalledMemoryItem],
     token_budget: int,
+    *,
+    prefer_short_first: bool = False,
 ) -> list[RecalledMemoryItem]:
     """Best-first two-form (full + short) token budget packer for Zone 4 and Phase 3 recall.
 
-    - Rank 0 (strongest consensus match) is always rendered in 'full' form.
-    - Subsequent items reserve their 'short' 1-line synopsis cost first so more distinct memories
-      fit, then upgrade from 'short' to 'full' in priority order as unreserved budget allows.
+    - When `prefer_short_first=False` (default, Zone 4 prose): Rank 0 is always admitted in 'full' form,
+      and subsequent items reserve their 'short' 1-line synopsis cost first before upgrading.
+    - When `prefer_short_first=True` (Phase 3 Cognition): reserves 'short' cost from Rank 0 downward so
+      more distinct top matches fit inside tight budgets before upgrading to 'full' with spare tokens.
     """
     if not items or token_budget <= 0:
         return []
@@ -226,9 +231,36 @@ def pack_recalled_items_to_budget(
         short_cost = max(1, min(full_cost, estimate_text_tokens(short_line)))
         prepared.append((m, short_txt, full_cost, short_cost))
 
+    if prefer_short_first and len(prepared) > 1:
+        first_item, first_short, first_full_cost, first_short_cost = prepared[0]
+        admitted: list[tuple[RecalledMemoryItem, str, int, int]] = [
+            (first_item, first_short, first_full_cost, first_short_cost)
+        ]
+        used_short_sum = first_short_cost
+        for entry in prepared[1:]:
+            _m, _stxt, _fcost, scost = entry
+            if used_short_sum + scost <= token_budget:
+                admitted.append(entry)
+                used_short_sum += scost
+
+        spare_tokens = max(0, token_budget - used_short_sum)
+        packed: list[RecalledMemoryItem] = []
+        for m, short_txt, full_cost, short_cost in admitted:
+            upgrade_delta = max(0, full_cost - short_cost)
+            if upgrade_delta <= spare_tokens:
+                spare_tokens -= upgrade_delta
+                packed.append(
+                    m.model_copy(update={"short_content": short_txt, "render_form": "full"})
+                )
+            else:
+                packed.append(
+                    m.model_copy(update={"short_content": short_txt, "render_form": "short"})
+                )
+        return packed
+
     # Always admit Rank 0 in full form
     first_item, first_short, first_full_cost, _first_short_cost = prepared[0]
-    admitted: list[tuple[RecalledMemoryItem, str, int, int]] = [
+    admitted = [
         (first_item, first_short, first_full_cost, first_full_cost)
     ]
     used_short_sum = first_full_cost
@@ -241,7 +273,7 @@ def pack_recalled_items_to_budget(
 
     # Upgrade admitted[1:] from short to full in best-first rank order when unreserved budget permits
     spare_tokens = max(0, token_budget - used_short_sum)
-    packed: list[RecalledMemoryItem] = [
+    packed = [
         first_item.model_copy(
             update={"short_content": first_short, "render_form": "full"}
         )
@@ -259,6 +291,182 @@ def pack_recalled_items_to_budget(
             )
 
     return packed
+
+
+def format_arc_objective_prompt_line(
+    arc_objective: CharacterObjective | None,
+    *,
+    world_timestamp: str | None = None,
+    temperament_archetype: str | None = None,
+    for_cognition: bool = True,
+) -> str:
+    """Format a quiet, always-on Arc Objective anchor with optional world clock and CARE vigilance hint."""
+    if arc_objective is None:
+        if for_cognition:
+            return "- Arc Objective: None (no active multi-scene commitment; focus on the immediate scene and core drive)."
+        return ""
+
+    deadline_part = (
+        f" [Deadline/Condition: {arc_objective.deadline_cue}]"
+        if arc_objective.deadline_cue
+        else ""
+    )
+    if not for_cognition:
+        return (
+            f"    Arc Objective (background compass — do not force into unrelated turns): "
+            f"{arc_objective.summary}{deadline_part}\n"
+        )
+
+    arch = (temperament_archetype or "balanced").strip().lower()
+    if arch in ("paranoiac", "proud_rival"):
+        vigilance_hint = (
+            "Keep sharp awareness of schedule, leverage, and obstacles, while acting naturally on the immediate scene."
+        )
+    elif arch == "volatile":
+        vigilance_hint = (
+            "Pursue with drive when openings appear, without derailing unrelated interactions."
+        )
+    else:
+        vigilance_hint = (
+            "Background arc compass — pursue organically when relevant or time-pressured; never force it into unrelated scene beats."
+        )
+    time_part = (
+        f" [Current Time: {describe_world_timestamp(world_timestamp)}]"
+        if world_timestamp and world_timestamp.strip()
+        else ""
+    )
+    return (
+        f"- Arc Objective: {arc_objective.summary}{deadline_part}{time_part} "
+        f"*({vigilance_hint})*"
+    )
+
+
+def build_cognition_witnessed_synopsis_strip(
+    episodic_chunks: Sequence[EpisodicChunkRecord],
+    branch_turns: Sequence[TurnNodeRecord],
+    character_id: str,
+    *,
+    max_tokens: int = 350,
+) -> str:
+    """Render an epistemically-filtered 1-line synopsis strip of episodes witnessed by `character_id`."""
+    if not episodic_chunks or max_tokens <= 0:
+        return ""
+
+    ordered = sorted(episodic_chunks, key=lambda c: (c.start_turn_depth, c.end_turn_depth))
+    witnessed: list[EpisodicChunkRecord] = []
+    for chunk in ordered:
+        wids = getattr(chunk, "witness_character_ids", None) or []
+        if wids:
+            if character_id not in wids:
+                continue
+        else:
+            # Legacy chunk without witness list: infer from constituent turns
+            if not any(
+                chunk.start_turn_depth <= t.depth_index <= chunk.end_turn_depth
+                and was_character_present_on_turn(t, character_id)
+                for t in branch_turns
+            ):
+                continue
+        witnessed.append(chunk)
+
+    if not witnessed:
+        return ""
+
+    entries: list[tuple[int, EpisodicChunkRecord, str]] = [
+        (
+            idx,
+            c,
+            f"  - [Turns {c.start_turn_depth}–{c.end_turn_depth}]: {_chunk_synopsis_fallback(c)}",
+        )
+        for idx, c in enumerate(witnessed)
+    ]
+
+    def _total_tokens(items: list[tuple[int, EpisodicChunkRecord, str]]) -> int:
+        if not items:
+            return 0
+        return estimate_text_tokens("\n".join(line for _i, _c, line in items))
+
+    # If over budget, drop lowest-salience oldest chunks first while protecting high-salience & recent chunks
+    surviving = list(entries)
+    while surviving and _total_tokens(surviving) > max_tokens:
+        if len(surviving) == 1:
+            break
+        # Prefer preserving newest 2 chunks and high-salience (>= 8) chunks before dropping
+        total_len = len(surviving)
+        drop_idx = min(
+            range(total_len),
+            key=lambda pos: (
+                1 if pos >= total_len - 2 else 0,
+                1 if getattr(surviving[pos][1], "salience_score", 5) >= 8 else 0,
+                getattr(surviving[pos][1], "salience_score", 5),
+                surviving[pos][0],
+            ),
+        )
+        surviving.pop(drop_idx)
+
+    return "\n".join(line for _i, _c, line in surviving)
+
+
+def build_cognition_recent_turns_tail(
+    branch_turns: Sequence[TurnNodeRecord],
+    episodic_chunks: Sequence[EpisodicChunkRecord],
+    character_id: str,
+    *,
+    present_characters: Sequence[CharacterRecord],
+    character_name_map: Mapping[str, str] | None = None,
+    max_turns: int = 3,
+    max_tokens: int = 300,
+) -> str:
+    """Render a compact, whisper-filtered tail of up to `max_turns` recent witnessed unsummarized turns."""
+    if not branch_turns or max_turns <= 0 or max_tokens <= 0:
+        return ""
+
+    max_sum_depth = max((c.end_turn_depth for c in episodic_chunks), default=-1)
+    witnessed_recent = [
+        t
+        for t in branch_turns
+        if t.depth_index > max_sum_depth
+        and t.actor_id != "__arrival__"
+        and was_character_present_on_turn(t, character_id)
+    ][-max_turns:]
+    if not witnessed_recent:
+        return ""
+
+    name_lookup = dict(character_name_map or {})
+    name_lookup["__narrator__"] = "Narrator"
+    name_lookup["__solo__"] = "Narrator"
+    for pc in present_characters:
+        name_lookup.setdefault(pc.id, pc.name)
+
+    whisper_roster: list[CharacterRecord] = list(present_characters)
+    if whisper_roster:
+        seen_ids = {c.id for c in whisper_roster}
+        template_char = whisper_roster[0]
+        for cid, cname in name_lookup.items():
+            if cid not in seen_ids and cid not in ("__narrator__", "__solo__") and cname.strip():
+                whisper_roster.append(template_char.model_copy(update={"id": cid, "name": cname}))
+                seen_ids.add(cid)
+
+    lines: list[str] = []
+    for t in witnessed_recent:
+        vis_user = filter_user_message_for_character(
+            t.user_message,
+            target_character_id=character_id,
+            campaign_characters=whisper_roster,
+        )
+        u_clean = " ".join(vis_user.replace("\r", " ").replace("\n", " ").split()).strip()[:120]
+        p_clean = " ".join((t.raw_prose or "").replace("\r", " ").replace("\n", " ").split()).strip()[:160]
+        speaker_label = name_lookup.get(t.actor_id, t.actor_id)
+        if t.depth_index == 0 and t.user_message == "[Scene Start]":
+            lines.append(f"  - [Turn 0 Opening]: {speaker_label}: \"{p_clean}\"")
+        else:
+            lines.append(
+                f"  - [Turn {t.depth_index}]: User: \"{u_clean}\" | {speaker_label}: \"{p_clean}\""
+            )
+
+    while len(lines) > 1 and estimate_text_tokens("\n".join(lines)) > max_tokens:
+        lines.pop(0)
+    return "\n".join(lines)
 
 
 def elevate_compacted_episode_turns(

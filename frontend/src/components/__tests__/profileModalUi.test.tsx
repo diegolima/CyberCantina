@@ -32,7 +32,7 @@ const BASE_DEFAULTS: ProfileBehaviorValues = {
   lodImportanceBonus: 2,
   zone2BudgetSharePct: 45,
   recallBudgetProseTokens: 450,
-  recallBudgetCognitionTokens: 220,
+  recallBudgetCognitionTokens: 450,
   maxSceneFlags: 10,
   agentDispatchMode: "sequential",
   personaDisclosureMode: "llm_intent",
@@ -81,7 +81,7 @@ const BASE_MODEL_SETTINGS: ProfileModelSettingsResponse = {
   effective_lod_importance_bonus: 2,
   effective_zone2_budget_share_pct: 45,
   effective_recall_budget_prose_tokens: 450,
-  effective_recall_budget_cognition_tokens: 220,
+  effective_recall_budget_cognition_tokens: 450,
   user_working_memory_turns: 16,
   user_delegate_cognition_to_clerk: true,
   active_prompt_preset_id: null,
@@ -114,7 +114,7 @@ const BASE_MODEL_SETTINGS: ProfileModelSettingsResponse = {
   default_lod_importance_bonus: 2,
   default_zone2_budget_share_pct: 45,
   default_recall_budget_prose_tokens: 450,
-  default_recall_budget_cognition_tokens: 220,
+  default_recall_budget_cognition_tokens: 450,
 };
 
 describe("ProfileModal UX Redesign UI", () => {

@@ -7,6 +7,7 @@ import type {
   CampaignTurnSendOptions,
   CampaignTurnSendOutcome,
   CampaignWorldSettings,
+  CharacterObjectiveOverridePayload,
   CreateNpcPartyPayload,
   ItemEquipActionPayload,
   LiveStreamState,
@@ -572,6 +573,28 @@ export function useCampaignTurnActions({
     }
   };
 
+  const handleOverrideCharacterObjective = async (
+    characterId: string,
+    payload: CharacterObjectiveOverridePayload
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    try {
+      const updated = await api.overrideCharacterObjective(
+        bundle.campaign.id,
+        characterId,
+        payload
+      );
+      setBundle(updated);
+    } catch (err) {
+      setStreamError({
+        kind: "action",
+        message: err instanceof Error ? err.message : String(err),
+        retryable: false,
+      });
+      throw err;
+    }
+  };
+
   const handleOverridePlayerPhysicalState = async (
     payload: PhysicalStateOverridePayload
   ) => {
@@ -875,6 +898,7 @@ export function useCampaignTurnActions({
     handleOverrideLocation,
     handleOverrideCharacterLocation,
     handleOverrideCharacterPhysicalState,
+    handleOverrideCharacterObjective,
     handleOverridePlayerPhysicalState,
     handleCreateNpcParty,
     handleDisbandParty,

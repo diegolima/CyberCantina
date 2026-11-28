@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { api } from "../../api";
 import type {
+  CharacterObjectiveOverridePayload,
   CodexReturnTarget,
   ItemEquipActionPayload,
   LocationContainer,
@@ -153,6 +154,10 @@ interface WorldCodexTabProps {
     characterId: string,
     payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
+  onOverrideCharacterObjective?: (
+    characterId: string,
+    payload: CharacterObjectiveOverridePayload
+  ) => Promise<void> | void;
   onOverridePlayerPhysicalState?: (
     payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
@@ -206,6 +211,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   onSaveMemories,
   onRelocateCharacter,
   onOverrideCharacterPhysicalState,
+  onOverrideCharacterObjective,
   onOverridePlayerPhysicalState,
   onReturnToWorldTab,
 }) => {
@@ -1349,6 +1355,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             onSaveMemories={onSaveMemories}
             onRelocateCharacter={onRelocateCharacter}
             onOverrideCharacterPhysicalState={onOverrideCharacterPhysicalState}
+            onOverrideCharacterObjective={onOverrideCharacterObjective}
+            unlockLore={unlockLore}
             onOverridePlayerPhysicalState={onOverridePlayerPhysicalState}
             onOpenMechanicsHelp={(topicId, returnTarget) =>
               handleOpenMechanicsTopic(topicId, returnTarget ?? null)
@@ -1507,6 +1515,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           onSaveMemories={onSaveMemories}
           onRelocateCharacter={onRelocateCharacter}
           onOverrideCharacterPhysicalState={onOverrideCharacterPhysicalState}
+          onOverrideCharacterObjective={onOverrideCharacterObjective}
+          unlockLore={unlockLore}
           onOverridePlayerPhysicalState={onOverridePlayerPhysicalState}
           onOpenMechanicsHelp={(topicId, returnTarget) =>
             handleOpenMechanicsTopic(topicId, returnTarget ?? null)

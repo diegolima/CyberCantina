@@ -13,7 +13,7 @@ from app.engine.parties import (
     resolve_character_location_override,
     resolve_location_override_movement,
 )
-from app.schemas.character import CognitionBlock
+from app.schemas.character import CharacterObjective, CognitionBlock
 from app.schemas.party import (
     USER_PARTY_MEMBER_ID,
     LocationOverrideMoveMode,
@@ -518,6 +518,66 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                 WHERE turn_id = ? AND character_id = ?
                 """,
                 (norm_stance, clean_ctx, leaf_turn.id, character_id),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(
+                    f"No state snapshot found for character '{character_id}' on active turn."
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def override_character_objective(
+        self,
+        campaign_id: str,
+        character_id: str,
+        *,
+        summary: str | None = None,
+        deadline_cue: str | None = None,
+        clear: bool = False,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Override or clear an NPC's active Arc Objective in-place on the active leaf turn."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
+        participant_set = set(campaign.participant_character_ids or [campaign.character_id]) | set(
+            leaf_turn.character_states.keys()
+        )
+        if character_id not in participant_set:
+            raise ValueError(
+                f"Character '{character_id}' is not a participant in campaign '{campaign_id}'."
+            )
+
+        existing_state = leaf_turn.character_states.get(character_id)
+        if clear or not (summary and summary.strip()):
+            serialized_obj: str | None = None
+        else:
+            existing_depth = (
+                existing_state.arc_objective.set_at_turn_depth
+                if existing_state and existing_state.arc_objective and existing_state.arc_objective.set_at_turn_depth is not None
+                else leaf_turn.depth_index
+            )
+            new_obj = CharacterObjective(
+                summary=summary.strip(),
+                deadline_cue=deadline_cue.strip() if deadline_cue and deadline_cue.strip() else None,
+                set_at_turn_depth=existing_depth,
+            )
+            serialized_obj = new_obj.model_dump_json()
+
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                UPDATE character_states
+                SET arc_objective_json = ?
+                WHERE turn_id = ? AND character_id = ?
+                """,
+                (serialized_obj, leaf_turn.id, character_id),
             )
             if cur.rowcount == 0:
                 raise ValueError(

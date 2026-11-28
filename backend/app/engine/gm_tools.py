@@ -505,6 +505,11 @@ async def execute_gm_tool(
                     "name": char.name,
                     "physical_stance": state.physical_stance if state is not None else "unspecified",
                     "physical_context": state.physical_context if state is not None else "",
+                    "arc_objective": (
+                        state.arc_objective.model_dump()
+                        if state is not None and state.arc_objective is not None
+                        else None
+                    ),
                     "summary": _format_character_detail(char, state, vis=vis, detailed=True),
                 },
                 sources,

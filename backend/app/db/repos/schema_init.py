@@ -1294,6 +1294,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE character_states ADD COLUMN physical_context TEXT NOT NULL DEFAULT ''"
                 )
+            if "arc_objective_json" not in cs_cols:
+                conn.execute(
+                    "ALTER TABLE character_states ADD COLUMN arc_objective_json TEXT NULL"
+                )
 
             pts_cols = {
                 r["name"]

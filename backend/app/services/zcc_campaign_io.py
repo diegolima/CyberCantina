@@ -1652,9 +1652,10 @@ def ingest_campaigns_atomic(
                         valence, arousal, active_want, active_plan,
                         relationship_notes_json, equipped_json, inventory_json,
                         unlocked_persona_keys_json, persona_knowledge_provenance_json,
-                        affective_state_json, physical_stance, physical_context
+                        affective_state_json, physical_stance, physical_context,
+                        arc_objective_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mapped_tid,
@@ -1673,6 +1674,7 @@ def ingest_campaigns_atomic(
                         _remap_affective_state_json(cs.get("affective_state_json"), id_remap),
                         normalize_physical_stance(cs.get("physical_stance")),
                         sanitize_physical_context(cs.get("physical_context")),
+                        cs.get("arc_objective_json"),
                     ),
                 )
 

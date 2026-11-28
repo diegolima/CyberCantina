@@ -18,7 +18,19 @@ from app.schemas.turn import (
     WorldStateSnapshot,
 )
 from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
-from app.db.repos.base import _delete_campaign_rows, _dump_care_state_json, utc_now_iso
+from app.db.repos.base import (
+    _delete_campaign_rows,
+    _dump_arc_objective_json,
+    _dump_care_state_json,
+    utc_now_iso,
+)
+
+
+def _seed_objective_at_depth(char, depth: int):
+    base_obj = getattr(char.baseline_psyche, "default_objective", None)
+    if base_obj is None:
+        return None
+    return base_obj.model_copy(update={"set_at_turn_depth": max(0, int(depth))})
 
 
 def resolve_default_narrative_voice(
@@ -271,6 +283,7 @@ class CampaignsMixin:
             arousal=character.baseline_psyche.arousal,
             active_want=character.baseline_psyche.default_want,
             active_plan=character.baseline_psyche.default_plan,
+            arc_objective=_seed_objective_at_depth(character, 0),
             relationship_notes={"user": "Acquaintance / Uncertain trust"},
             equipped=list(character.equipped),
             inventory=list(character.inventory),
@@ -286,6 +299,7 @@ class CampaignsMixin:
                 arousal=extra_char.baseline_psyche.arousal,
                 active_want=extra_char.baseline_psyche.default_want,
                 active_plan=extra_char.baseline_psyche.default_plan,
+                arc_objective=_seed_objective_at_depth(extra_char, 0),
                 relationship_notes={"user": "Acquaintance / Uncertain trust"},
                 equipped=list(extra_char.equipped),
                 inventory=list(extra_char.inventory),
@@ -401,14 +415,15 @@ class CampaignsMixin:
                 """,
                 (campaign_id, char.id, leaf_turn.id, now),
             )
+            joined_objective = _seed_objective_at_depth(char, leaf_turn.depth_index)
             conn.execute(
                 """
                 INSERT INTO character_states (
                     turn_id, character_id, current_location_id, mood_label,
                     valence, arousal, active_want, active_plan, relationship_notes_json,
-                    equipped_json, inventory_json, affective_state_json
+                    equipped_json, inventory_json, affective_state_json, arc_objective_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(turn_id, character_id) DO UPDATE SET
                     current_location_id = excluded.current_location_id
                 """,
@@ -425,6 +440,7 @@ class CampaignsMixin:
                     dump_items_json(char.equipped),
                     dump_items_json(char.inventory),
                     _dump_care_state_json(joined_care),
+                    _dump_arc_objective_json(joined_objective),
                 ),
             )
             conn.commit()

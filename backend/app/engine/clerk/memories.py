@@ -128,7 +128,11 @@ def _memory_similarity(
 
 
 _SIGNIFICANCE_PATTERNS: list[
-    tuple[Literal["trauma", "bonding", "betrayal", "revelation", "vow"], re.Pattern[str], str]
+    tuple[
+        Literal["trauma", "bonding", "betrayal", "revelation", "vow", "commitment"],
+        re.Pattern[str],
+        str,
+    ]
 ] = [
     (
         "betrayal",
@@ -147,6 +151,17 @@ _SIGNIFICANCE_PATTERNS: list[
             re.I,
         ),
         "Solemn Vow",
+    ),
+    (
+        "commitment",
+        re.compile(
+            r"\b(agreed to (?:meet|escort|guide|deliver|pay|smuggle)|"
+            r"struck a deal|half paid upfront|for transit through|"
+            r"meet(?:ing)? at (?:daybreak|dawn|dusk|midnight)|"
+            r"hired (?:you|me|them) to)\b",
+            re.I,
+        ),
+        "Agreed Commitment",
     ),
     (
         "trauma",
@@ -193,7 +208,7 @@ def _extract_heuristic_character_memories(
     if not combined:
         return []
 
-    matched_sig: Literal["trauma", "bonding", "betrayal", "revelation", "vow"] | None = None
+    matched_sig: Literal["trauma", "bonding", "betrayal", "revelation", "vow", "commitment"] | None = None
     label_prefix = ""
     for sig, pattern, prefix in _SIGNIFICANCE_PATTERNS:
         if pattern.search(combined):

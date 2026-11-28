@@ -4,6 +4,7 @@ import type {
   CampaignStateBundle,
   CampaignWorldSettings,
   CharacterChoiceSet,
+  CharacterObjectiveOverridePayload,
   ChoicePreviewResponse,
   CreateCampaignPayload,
   CreateNpcPartyPayload,
@@ -92,6 +93,19 @@ export const campaignsApi = {
   ) =>
     fetchJson<CampaignStateBundle>(
       `${API_BASE}/campaigns/${campaignId}/characters/${characterId}/physical-state-override`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  overrideCharacterObjective: (
+    campaignId: string,
+    characterId: string,
+    payload: CharacterObjectiveOverridePayload
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/characters/${characterId}/objective-override`,
       {
         method: "POST",
         body: JSON.stringify(payload),

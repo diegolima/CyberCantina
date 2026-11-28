@@ -48,7 +48,7 @@ const SAMPLE_SETTINGS: ProfileModelSettingsResponse = {
   effective_lod_importance_bonus: 2,
   effective_zone2_budget_share_pct: 45,
   effective_recall_budget_prose_tokens: 450,
-  effective_recall_budget_cognition_tokens: 220,
+  effective_recall_budget_cognition_tokens: 450,
   active_prompt_preset_id: null,
   default_actor_profile: {
     provider_id: "prov-1",
@@ -79,7 +79,7 @@ const SAMPLE_SETTINGS: ProfileModelSettingsResponse = {
   default_lod_importance_bonus: 2,
   default_zone2_budget_share_pct: 45,
   default_recall_budget_prose_tokens: 450,
-  default_recall_budget_cognition_tokens: 220,
+  default_recall_budget_cognition_tokens: 450,
 };
 
 describe("profilePreferences helpers", () => {

@@ -14,7 +14,7 @@ SHOWCASE_SEED_VERSION = SHOWCASE_MEDIA_VERSION
 
 # Independent per-asset content versions (incremented when world.json / character.json content upgrades).
 SHOWCASE_WORLD_SEED_VERSION = 3
-SHOWCASE_CHARACTER_SEED_VERSION = 3
+SHOWCASE_CHARACTER_SEED_VERSION = 4
 
 SHOWCASE_WORLD_SEED_KEY = "showcase:the_green_lie"
 # Preserved as stable internal provenance/media keys for existing DB rows and immutable public media URLs.
@@ -50,8 +50,8 @@ SEED_CATALOG: dict[str, SeedAssetSpec] = {
         display_name="Yulia Halim",
         latest_version=SHOWCASE_CHARACTER_SEED_VERSION,
         changelog=(
-            "v3: Updated character sheet to Yulia Halim with refined profile, voice anchors, "
-            "and Sovereign Cipher artifact linkage."
+            "v4: Added Yulia Halim's starting Arc Objective (Sluice transit to Sector 8) "
+            "on top of v3 profile, voice anchors, and Sovereign Cipher artifact linkage."
         ),
     ),
 }

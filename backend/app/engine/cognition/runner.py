@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from app.config import settings
 from app.engine.affective_engine import (
@@ -26,6 +26,10 @@ from app.engine.parties import (
 from app.engine.phase2_context import (
     DiscoveredPersonaView,
     TurnContextBundle,
+    build_cognition_recent_turns_tail,
+    build_cognition_witnessed_synopsis_strip,
+    describe_world_timestamp,
+    format_arc_objective_prompt_line,
     get_immediate_level1_container,
     resolve_character_previous_state,
     select_active_container_lore_for_turn,
@@ -49,11 +53,13 @@ from app.schemas.physical import format_physical_state_prompt_value
 from app.schemas.turn import (
     CharacterSpotlightRole,
     ChoiceResolution,
+    EpisodicChunkRecord,
     Phase3ProgressCallback,
     Phase3ProgressEvent,
     Phase3RosterEntry,
     PreTurnAnalysis,
     RecalledMemoryItem,
+    TurnNodeRecord,
 )
 from app.schemas.world import (
     LocationNode,
@@ -113,6 +119,10 @@ async def run_character_cognition_agent(
     active_parties: Sequence[PartyRecord] | None = None,
     all_character_states: dict[str, CharacterStateSnapshot] | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
+    episodic_chunks: Sequence[EpisodicChunkRecord] | None = None,
+    branch_turns: Sequence[TurnNodeRecord] | None = None,
+    world_timestamp: str | None = None,
+    character_name_map: Mapping[str, str] | None = None,
 ) -> CognitionBlock:
     """Execute a single character subconscious cognition agent turn."""
     template = system_prompt_template or get_default_prompt(
@@ -356,6 +366,48 @@ async def run_character_cognition_agent(
         else ""
     )
 
+    eff_world_time = (
+        world_timestamp.strip()
+        if world_timestamp and world_timestamp.strip()
+        else (world.global_rules.starting_timestamp or "").strip()
+    )
+    world_time_line = (
+        f"- Current In-World Time: {describe_world_timestamp(eff_world_time)}\n"
+        if eff_world_time
+        else ""
+    )
+    arc_obj_line = format_arc_objective_prompt_line(
+        previous_state.arc_objective,
+        world_timestamp=eff_world_time or None,
+        temperament_archetype=character.baseline_psyche.temperament.archetype,
+        for_cognition=True,
+    )
+    witnessed_synopses = build_cognition_witnessed_synopsis_strip(
+        episodic_chunks or (),
+        branch_turns or (),
+        character.id,
+        max_tokens=350,
+    )
+    synopsis_section = (
+        f"Story So Far (Witnessed Episode Synopses):\n{witnessed_synopses}\n\n"
+        if witnessed_synopses
+        else ""
+    )
+    recent_tail_text = build_cognition_recent_turns_tail(
+        branch_turns or (),
+        episodic_chunks or (),
+        character.id,
+        present_characters=[character, *co_present_characters],
+        character_name_map=character_name_map,
+        max_turns=3,
+        max_tokens=300,
+    )
+    recent_tail_section = (
+        f"Recent Scene Exchanges (Witnessed):\n{recent_tail_text}\n\n"
+        if recent_tail_text
+        else ""
+    )
+
     user_prompt = (
         f"Character: {character.name} (id='{character.id}', Role in scene: {role})\n"
         f"- Tagline: {character.tagline}\n"
@@ -364,7 +416,9 @@ async def run_character_cognition_agent(
         f"- Core Fear: {character.baseline_psyche.core_fear}\n"
         f"- Voice Quotes: {', '.join(voice_quotes) or 'None'}\n\n"
         f"Previous Psychological State (Emotional Anchor):\n"
+        f"{world_time_line}"
         f"{affective_anchor_block}\n"
+        f"{arc_obj_line}\n"
         f"- Active Want: {clean_prev_want}\n"
         f"- Active Plan: {clean_prev_plan}\n"
         f"{anchor_guideline}\n\n"
@@ -385,6 +439,8 @@ async def run_character_cognition_agent(
         f"- Subtext Interpretation: {pre_turn.subtext_interpretation}\n"
         f"{roll_text}\n"
         f"{choice_directive_text}"
+        f"{synopsis_section}"
+        f"{recent_tail_section}"
         f"Recalled Scoped Memories & Lore (Synthesize relevant beats into <recall> in under 12 words per bullet):\n"
         f"{recalled_text}\n\n"
     )
@@ -692,6 +748,10 @@ async def run_phase3_multi_cognition(
                         active_parties=context.active_parties,
                         all_character_states=context.all_character_states,
                         current_player_state=context.current_player_state,
+                        episodic_chunks=context.episodic_chunks,
+                        branch_turns=context.branch_turns,
+                        world_timestamp=context.leaf_turn.world_snapshot.world_timestamp,
+                        character_name_map=context.character_name_map,
                     )
                 used_fallback = False
             except Exception as err:
@@ -792,6 +852,10 @@ async def run_phase3_multi_cognition(
                     active_parties=context.active_parties,
                     all_character_states=context.all_character_states,
                     current_player_state=context.current_player_state,
+                    episodic_chunks=context.episodic_chunks,
+                    branch_turns=context.branch_turns,
+                    world_timestamp=context.leaf_turn.world_snapshot.world_timestamp,
+                    character_name_map=context.character_name_map,
                 )
                 used_fallback = False
             except Exception as err:

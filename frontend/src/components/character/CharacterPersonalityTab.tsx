@@ -596,6 +596,45 @@ export const CharacterPersonalityTab: React.FC<CharacterPersonalityTabProps> = (
           />
         </div>
 
+        {/* Default Arc Objective (Optional Multi-Scene Goal) */}
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+          <ClickToEditField
+            label="Default Arc Objective (Optional Multi-Scene Goal)"
+            readOnlyLabel="Default Arc Objective"
+            value={psyche.default_objective?.summary ?? ""}
+            placeholder="Optional starting mission or multi-scene commitment (leave blank if none)..."
+            readOnly={readOnly}
+            onChange={(val) => {
+              const trimmed = val.trim();
+              handlePsycheChange({
+                default_objective: trimmed
+                  ? {
+                      summary: val,
+                      deadline_cue: psyche.default_objective?.deadline_cue ?? null,
+                    }
+                  : null,
+              });
+            }}
+          />
+          <ClickToEditField
+            label="Objective Deadline Cue (Optional)"
+            readOnlyLabel="Objective Deadline Cue"
+            value={psyche.default_objective?.deadline_cue ?? ""}
+            placeholder="e.g. at daybreak"
+            readOnly={readOnly || !psyche.default_objective?.summary?.trim()}
+            onChange={(val) => {
+              const curSummary = psyche.default_objective?.summary?.trim();
+              if (!curSummary) return;
+              handlePsycheChange({
+                default_objective: {
+                  summary: psyche.default_objective?.summary ?? curSummary,
+                  deadline_cue: val.trim() ? val : null,
+                },
+              });
+            }}
+          />
+        </div>
+
         {/* Default Want & Plan */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <ClickToEditField

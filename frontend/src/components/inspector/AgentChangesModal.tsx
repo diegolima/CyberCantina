@@ -27,6 +27,7 @@ import {
   ExtractedCharacterMemory,
   ImprovisedLinkSpec,
   ImprovisedLocationSpec,
+  ObjectiveTransitionRecord,
   Phase4TurnProgress,
   PhysicalStance,
   PhysicalStateResetReason,
@@ -763,7 +764,26 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
     prevPhysContext.trim() !== nextPhysContext.trim() ||
     Boolean(charResetReason);
 
+  const objectiveTransition: ObjectiveTransitionRecord | null =
+    turn?.post_turn?.objective_transitions?.[charId] ??
+    (delta?.objective_action && delta.objective_action !== "keep"
+      ? {
+          action: delta.objective_action,
+          previous_objective: prevCharState?.arc_objective ?? null,
+          new_objective:
+            turn?.character_states?.[charId]?.arc_objective ??
+            (delta.objective_summary
+              ? {
+                  summary: delta.objective_summary,
+                  deadline_cue: delta.objective_deadline_cue ?? null,
+                }
+              : null),
+          disruption_triggered: false,
+        }
+      : null);
+
   const hasAnyMutations =
+    Boolean(objectiveTransition) ||
     Boolean(delta?.updated_want) ||
     Boolean(delta?.affect_tone) ||
     valDelta !== 0 ||
@@ -986,6 +1006,91 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
                   nextPhysStance,
                   nextPhysContext,
                   charResetReason
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Multi-Scene Arc Objective Transition */}
+          {objectiveTransition && (
+            <div className="agent-modal-card">
+              <div className="agent-modal-card-header" style={{ justifyContent: "space-between" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Compass size={13} color="var(--accent-amber)" />
+                  <span>Arc Objective</span>
+                </span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span
+                    className="badge"
+                    style={{
+                      fontSize: "0.68rem",
+                      textTransform: "uppercase",
+                      borderColor:
+                        objectiveTransition.action === "abandon"
+                          ? "rgba(244, 63, 94, 0.4)"
+                          : objectiveTransition.action === "complete"
+                            ? "rgba(16, 185, 129, 0.4)"
+                            : "rgba(245, 158, 11, 0.4)",
+                      color:
+                        objectiveTransition.action === "abandon"
+                          ? "var(--accent-rose)"
+                          : objectiveTransition.action === "complete"
+                            ? "var(--accent-emerald)"
+                            : "var(--accent-amber)",
+                    }}
+                  >
+                    {objectiveTransition.action === "set"
+                      ? "Set"
+                      : objectiveTransition.action === "refine"
+                        ? "Refined"
+                        : objectiveTransition.action === "complete"
+                          ? "Completed"
+                          : "Abandoned"}
+                  </span>
+                  {objectiveTransition.disruption_triggered && (
+                    <span
+                      className="badge"
+                      style={{
+                        fontSize: "0.66rem",
+                        borderColor: "rgba(168, 85, 247, 0.4)",
+                        color: "var(--accent-violet)",
+                      }}
+                    >
+                      Disruption
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="agent-modal-card-body" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {objectiveTransition.previous_objective && (
+                  <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", textDecoration: "line-through" }}>
+                    {objectiveTransition.previous_objective.summary}
+                    {objectiveTransition.previous_objective.deadline_cue
+                      ? ` (${objectiveTransition.previous_objective.deadline_cue})`
+                      : ""}
+                  </div>
+                )}
+                {objectiveTransition.new_objective ? (
+                  <div style={{ fontSize: "0.82rem", color: "var(--text-primary)", fontWeight: 500 }}>
+                    {objectiveTransition.new_objective.summary}
+                    {objectiveTransition.new_objective.deadline_cue && (
+                      <span
+                        className="badge"
+                        style={{
+                          marginLeft: 8,
+                          fontSize: "0.68rem",
+                          borderColor: "rgba(245, 158, 11, 0.4)",
+                          color: "var(--accent-amber)",
+                        }}
+                      >
+                        {objectiveTransition.new_objective.deadline_cue}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", fontStyle: "italic" }}>
+                    Cleared (no active arc objective)
+                  </div>
                 )}
               </div>
             </div>

@@ -16,6 +16,7 @@ from app.db.provider_store import ProviderStore
 from app.db.vector_store import VectorStore
 from app.schemas.affective import AffectiveCareState
 from app.schemas.character import (
+    CharacterObjective,
     GalleryImage,
     ItemInstance,
     VALID_EMOTIONS,
@@ -62,6 +63,27 @@ def _dump_care_state_json(care_state: AffectiveCareState | None) -> str:
     if care_state is None:
         return "{}"
     return care_state.model_dump_json()
+
+
+def _parse_arc_objective_json(raw_json: str | None) -> CharacterObjective | None:
+    """Deserialize arc_objective_json column, returning None for NULL/empty/invalid rows."""
+    if not raw_json:
+        return None
+    stripped = raw_json.strip()
+    if not stripped or stripped in ("{}", "null", "None"):
+        return None
+    try:
+        data = json.loads(stripped)
+        return CharacterObjective.from_raw(data)
+    except Exception:
+        return CharacterObjective.from_raw(stripped)
+
+
+def _dump_arc_objective_json(objective: CharacterObjective | None) -> str | None:
+    """Serialize optional CharacterObjective for SQLite persistence (NULL when absent)."""
+    if objective is None:
+        return None
+    return objective.model_dump_json()
 
 def _dump_provenance_json(prov: dict[str, Any] | None) -> str:
     """Serialize persona knowledge provenance dict for SQLite persistence."""

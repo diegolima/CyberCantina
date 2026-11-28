@@ -1245,11 +1245,12 @@
       "how_it_changes": [
         "Once active history exceeds working_memory_turns (default 12), Phase 5 Clerk compresses the oldest 6-turn slice into an EpisodicChunkRecord.",
         "High-salience episodes (critical d20 rolls, shattered composure, room transitions, secret reveals) resist LOD synopsis compression longer.",
+        "Phase 5 Clerk also extracts transformative personal memories across 6 categories—including 'commitment' shards for concrete deals, contracts, and deadlines—and tracks multi-scene Arc Objectives between core_drive and active_want (pivoting only on completion, abandonment, Major Events, or severe shocks).",
         "After 40 turns, unpromoted clerk_ephemeral character shards compact into permanent Memory Shards without losing key facts."
       ],
       "effect_on_play": [
         "Even after 50+ turns, recalling an old episode dynamically elevates its matching verbatim turns (strictly gated by room presence) into Zone 4.",
-        "Phase 3 reserves up to 2 personal character_shard slots so global world lore never crowds out an NPC's own core memories."
+        "Phase 3 Cognition receives an epistemically filtered Zone 2 synopsis strip, a compact tail of witnessed recent turns, a quiet Arc Objective anchor, and up to 2 personal character_shard slots packed short-first so global lore or a long Rank 0 chunk never crowds out earlier commitments."
       ],
       "under_the_hood": {
         "title": null,
@@ -1353,7 +1354,7 @@
       ],
       "under_the_hood": {
         "title": null,
-        "summary": "Two-form RAG packing (`recall_budget_prose_tokens = 450`, `recall_budget_cognition_tokens = 220`) guarantees Rank 0 in full form while squeezing more breadth via 1-line summaries.",
+        "summary": "Two-form RAG packing (`recall_budget_prose_tokens = 450`, `recall_budget_cognition_tokens = 450`) gives Zone 4 full Rank 0 detail while Phase 3 Cognition packs short-first across top recalls alongside a witnessed Zone 2 synopsis strip (~350 tok) and recent tail (~300 tok).",
         "items": [
           {
             "label": "Zone 2 Budget Share Cap",
@@ -1698,13 +1699,13 @@
           "meaning": "permanent prevents Phase 5 Clerk from silently dropping essential gear; artifact links an item to a World Codex Artifact entry."
         },
         {
-          "label": "Campaign Memory Edits",
-          "range_or_tag": "Codex → Memories",
-          "meaning": "Add, edit, or prune an NPC's Memory Shards from the next turn onward without mutating the base Character template."
+          "label": "Campaign Memory & Objective Edits",
+          "range_or_tag": "Codex → Memories / Current",
+          "meaning": "Add, edit, or prune an NPC's Memory Shards, or set/clear their multi-scene Arc Objective in GM Mode without mutating the base Character template."
         }
       ],
       "how_it_changes": [
-        "Inventory changes, Memory Shard edits, and Location overrides apply directly on the active leaf turn."
+        "Inventory changes, Memory Shard edits, Arc Objective overrides, and Location overrides apply directly on the active leaf turn."
       ],
       "effect_on_play": [
         "Gives you clean surgical control whenever an LLM makes a spatial or inventory slip—preserving smooth play across future turns and swipes."

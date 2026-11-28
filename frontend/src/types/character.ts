@@ -16,6 +16,18 @@ import type { PersonaKnowledgeProvenance } from "./persona";
 import type { PhysicalStance } from "./physical";
 import type { WorldWizardDraft } from "./world";
 
+export interface CharacterObjective {
+  summary: string;
+  deadline_cue?: string | null;
+  set_at_turn_depth?: number | null;
+}
+
+export interface CharacterObjectiveOverridePayload {
+  summary?: string | null;
+  deadline_cue?: string | null;
+  clear?: boolean;
+}
+
 export interface BaselinePsyche {
   mood_label: string;
   valence: number;
@@ -24,6 +36,7 @@ export interface BaselinePsyche {
   core_fear: string;
   default_want: string;
   default_plan: string;
+  default_objective?: CharacterObjective | null;
   initial_worldview?: WorldviewProfile;
   temperament?: TemperamentConfig;
 }
@@ -40,6 +53,7 @@ export type MemorySignificance =
   | "betrayal"
   | "revelation"
   | "vow"
+  | "commitment"
   | "consolidated";
 
 export interface MemoryShard {
@@ -295,6 +309,7 @@ export interface CharacterStateSnapshot {
   arousal: number;
   active_want: string;
   active_plan: string;
+  arc_objective?: CharacterObjective | null;
   relationship_notes: Record<string, string>;
   equipped?: ItemInstance[];
   inventory: ItemInstance[];

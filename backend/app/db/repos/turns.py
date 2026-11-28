@@ -33,6 +33,8 @@ from app.schemas.turn import (
 from app.schemas.world import LocationNode, LocationProp, is_edge_revealed
 from app.db.repos.base import (
     UNSET,
+    _dump_arc_objective_json,
+    _parse_arc_objective_json,
     _parse_care_state_json,
     _dump_care_state_json,
     _dump_provenance_json,
@@ -457,6 +459,11 @@ class TurnsBranchesMixin:
                                 if "physical_context" in pcs_keys
                                 else ""
                             ),
+                            arc_objective=_parse_arc_objective_json(
+                                pcs["arc_objective_json"]
+                                if "arc_objective_json" in pcs_keys
+                                else None
+                            ),
                         )
 
             for st in states_by_char.values():
@@ -467,9 +474,9 @@ class TurnsBranchesMixin:
                         valence, arousal, active_want, active_plan, relationship_notes_json,
                         equipped_json, inventory_json, unlocked_persona_keys_json,
                         persona_knowledge_provenance_json, affective_state_json,
-                        physical_stance, physical_context
+                        physical_stance, physical_context, arc_objective_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         turn_id,
@@ -488,6 +495,7 @@ class TurnsBranchesMixin:
                         _dump_care_state_json(st.care_state),
                         normalize_physical_stance(st.physical_stance),
                         sanitize_physical_context(st.physical_context),
+                        _dump_arc_objective_json(st.arc_objective),
                     ),
                 )
                 conn.execute(
@@ -764,9 +772,10 @@ class TurnsBranchesMixin:
                         valence, arousal, active_want, active_plan,
                         relationship_notes_json, equipped_json, inventory_json,
                         unlocked_persona_keys_json, persona_knowledge_provenance_json,
-                        affective_state_json, physical_stance, physical_context
+                        affective_state_json, physical_stance, physical_context,
+                        arc_objective_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(turn_id, character_id) DO UPDATE SET
                         current_location_id = excluded.current_location_id,
                         mood_label = excluded.mood_label,
@@ -781,7 +790,8 @@ class TurnsBranchesMixin:
                         persona_knowledge_provenance_json = excluded.persona_knowledge_provenance_json,
                         affective_state_json = excluded.affective_state_json,
                         physical_stance = excluded.physical_stance,
-                        physical_context = excluded.physical_context
+                        physical_context = excluded.physical_context,
+                        arc_objective_json = excluded.arc_objective_json
                     """,
                     (
                         turn_id,
@@ -800,6 +810,7 @@ class TurnsBranchesMixin:
                         _dump_care_state_json(eff_care),
                         normalize_physical_stance(st.physical_stance),
                         sanitize_physical_context(st.physical_context),
+                        _dump_arc_objective_json(st.arc_objective),
                     ),
                 )
             conn.commit()
@@ -1067,6 +1078,9 @@ class TurnsBranchesMixin:
                 physical_context=sanitize_physical_context(
                     r["physical_context"] if "physical_context" in r_keys else ""
                 ),
+                arc_objective=_parse_arc_objective_json(
+                    r["arc_objective_json"] if "arc_objective_json" in r_keys else None
+                ),
             )
         for t in turns:
             t.character_states = states_by_turn.get(
@@ -1110,7 +1124,8 @@ class TurnsBranchesMixin:
                     cs.persona_knowledge_provenance_json,
                     cs.affective_state_json,
                     cs.physical_stance,
-                    cs.physical_context
+                    cs.physical_context,
+                    cs.arc_objective_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
@@ -1191,7 +1206,8 @@ class TurnsBranchesMixin:
                     cs.persona_knowledge_provenance_json,
                     cs.affective_state_json,
                     cs.physical_stance,
-                    cs.physical_context
+                    cs.physical_context,
+                    cs.arc_objective_json
                 FROM branch_path bp
                 JOIN turn_nodes t ON t.id = bp.id
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
@@ -1244,7 +1260,8 @@ class TurnsBranchesMixin:
                     cs.persona_knowledge_provenance_json,
                     cs.affective_state_json,
                     cs.physical_stance,
-                    cs.physical_context
+                    cs.physical_context,
+                    cs.arc_objective_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
@@ -1912,6 +1929,9 @@ class TurnsBranchesMixin:
                 ),
                 physical_context=sanitize_physical_context(
                     r["physical_context"] if "physical_context" in r.keys() else ""
+                ),
+                arc_objective=_parse_arc_objective_json(
+                    r["arc_objective_json"] if "arc_objective_json" in r.keys() else None
                 ),
             ),
             recalled_items=[

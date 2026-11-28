@@ -26,6 +26,7 @@ from app.schemas.affective import (
 )
 from app.schemas.character import (
     CanonicalOutcomeTier,
+    CharacterObjective,
     CharacterRecord,
     CharacterStateSnapshot,
     CognitionBlock,
@@ -670,9 +671,9 @@ class ExtractedCharacterMemory(BaseModel):
             "the character's personal/emotional takeaway."
         )
     )
-    significance: Literal["trauma", "bonding", "betrayal", "revelation", "vow"] = Field(
+    significance: Literal["trauma", "bonding", "betrayal", "revelation", "vow", "commitment"] = Field(
         default="revelation",
-        description="Category of personal significance: 'trauma', 'bonding', 'betrayal', 'revelation', or 'vow'.",
+        description="Category of personal significance: 'trauma', 'bonding', 'betrayal', 'revelation', 'vow', or 'commitment'.",
     )
     keywords: list[str] = Field(
         default_factory=list,
@@ -696,10 +697,10 @@ class ExtractedCharacterMemory(BaseModel):
     @classmethod
     def _coerce_significance(
         cls, v: Any
-    ) -> Literal["trauma", "bonding", "betrayal", "revelation", "vow"]:
+    ) -> Literal["trauma", "bonding", "betrayal", "revelation", "vow", "commitment"]:
         if isinstance(v, str):
             low = v.strip().lower()
-            if low in {"trauma", "bonding", "betrayal", "revelation", "vow"}:
+            if low in {"trauma", "bonding", "betrayal", "revelation", "vow", "commitment"}:
                 return low  # type: ignore[return-value]
             if "traum" in low or "fear" in low or "scar" in low:
                 return "trauma"
@@ -707,6 +708,8 @@ class ExtractedCharacterMemory(BaseModel):
                 return "bonding"
             if "betray" in low or "decei" in low or "lie" in low:
                 return "betrayal"
+            if "commit" in low or "deal" in low or "contract" in low or "rendezvous" in low or "deadline" in low:
+                return "commitment"
             if "vow" in low or "promis" in low or "oath" in low or "swear" in low:
                 return "vow"
         return "revelation"
@@ -873,6 +876,18 @@ class WorldPostTurnDelta(BaseModel):
 CharacterLocationTransition = Literal["stay_here", "follow_player", "move_to_neighbor"]
 
 
+ObjectiveAction = Literal["keep", "set", "refine", "complete", "abandon"]
+
+
+class ObjectiveTransitionRecord(BaseModel):
+    """Audit log record capturing an arc objective transition for AgentChangesModal."""
+
+    action: ObjectiveAction
+    previous_objective: CharacterObjective | None = None
+    new_objective: CharacterObjective | None = None
+    disruption_triggered: bool = False
+
+
 class CharacterAgentDelta(BaseModel):
     """Per-character post-turn state mutation proposal emitted by a Character State Agent."""
 
@@ -941,6 +956,22 @@ class CharacterAgentDelta(BaseModel):
         default=None,
         description="Optional refreshed 1-sentence immediate goal if the scene shifted what this character wants.",
     )
+    objective_action: ObjectiveAction = Field(
+        default="keep",
+        description=(
+            "Arc-level strategic goal transition: 'keep' (default on routine turns), 'set' (only when no active arc "
+            "objective exists or a Major Event/severe shock forced a new arc goal), 'refine' (update active objective "
+            "terms/deadline), 'complete' (goal genuinely achieved), or 'abandon' (goal dropped/invalidated)."
+        ),
+    )
+    objective_summary: str | None = Field(
+        default=None,
+        description="Concise 1-sentence arc objective text when objective_action is 'set' or 'refine', else null.",
+    )
+    objective_deadline_cue: str | None = Field(
+        default=None,
+        description="Optional short in-world time/condition anchor (e.g. 'at daybreak') when setting/refining, else null.",
+    )
     stance_updates: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -1001,6 +1032,15 @@ class CharacterAgentDelta(BaseModel):
             "at the end of this turn. Carry forward verbatim when unchanged; empty string if none."
         ),
     )
+
+    @field_validator("objective_action", mode="before")
+    @classmethod
+    def _coerce_objective_action(cls, v: Any) -> ObjectiveAction:
+        if isinstance(v, str):
+            low = v.strip().lower()
+            if low in ("keep", "set", "refine", "complete", "abandon"):
+                return low  # type: ignore[return-value]
+        return "keep"
 
     @field_validator("affect_tone", mode="before")
     @classmethod
@@ -1256,6 +1296,10 @@ class PostTurnStateDelta(BaseModel):
     physical_state_reset_reasons: dict[str, PhysicalStateResetReason] = Field(
         default_factory=dict,
         description="Automatic smart staleness reset reasons keyed by 'user' or character_id.",
+    )
+    objective_transitions: dict[str, ObjectiveTransitionRecord] = Field(
+        default_factory=dict,
+        description="Per-character arc objective transition audit log keyed by character_id.",
     )
 
 

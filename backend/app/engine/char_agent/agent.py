@@ -566,6 +566,9 @@ def heuristic_character_agent_delta(
         valence_delta=val_delta,
         arousal_delta=ar_delta,
         updated_want=updated_want,
+        objective_action="keep",
+        objective_summary=None,
+        objective_deadline_cue=None,
         stance_updates=stances,
         items_equipped=eq_add,
         items_unequipped=eq_unequip,
@@ -596,6 +599,8 @@ async def run_character_post_turn_agent(
     decomposed_message: DecomposedUserMessage | None = None,
     campaign_elapsed_minutes: int = 0,
     active_parties: Sequence[PartyRecord] | None = None,
+    world_time_label: str | None = None,
+    disruption_note: str | None = None,
 ) -> CharacterAgentDelta:
     """Execute a focused Post-Turn Character State Agent for a single present character."""
     clerk_prof = profile or settings.clerk_profile
@@ -711,6 +716,22 @@ async def run_character_post_turn_agent(
         )
         or "unspecified"
     )
+    arc_obj_str = (
+        prev_state.arc_objective.format_prompt_text()
+        if prev_state.arc_objective is not None
+        else "None"
+    )
+    world_time_line = (
+        f"- Current In-World Time: {world_time_label}\n"
+        if world_time_label and world_time_label.strip()
+        else ""
+    )
+    disruption_line = (
+        f"- OBJECTIVE DISRUPTION SIGNAL: {disruption_note} — actively evaluate whether "
+        f"{character.name}'s Arc Objective must pivot ('set'), be refined ('refine'), or be abandoned ('abandon').\n"
+        if disruption_note and disruption_note.strip()
+        else ""
+    )
     user_prompt = (
         f"Character Identity:\n"
         f"- Name: {character.name} (id='{character.id}')\n"
@@ -719,7 +740,10 @@ async def run_character_post_turn_agent(
         f"- Core Fear: {character.baseline_psyche.core_fear}\n"
         f"- Role This Turn: {'Primary Speaking Character' if is_speaker else 'Co-Present Witness in Scene'}\n\n"
         f"Pre-Turn Baseline State (Anchor post-turn updates here):\n"
+        f"{world_time_line}"
         f"{affective_block}\n"
+        f"- Pre-Turn Arc Objective: {arc_obj_str}\n"
+        f"{disruption_line}"
         f"- Pre-Turn Want: {prev_state.active_want}\n"
         f"- Pre-Turn Starting Physical State: {starting_physical_str}\n"
         f"- Equipped / Worn: {equipped_str}\n"

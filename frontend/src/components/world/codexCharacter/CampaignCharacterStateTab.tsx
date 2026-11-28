@@ -5,12 +5,16 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  Compass,
+  Edit3,
   HeartPulse,
   MapPin,
+  Trash2,
   UserCheck,
   Users,
 } from "lucide-react";
 import {
+  CharacterObjectiveOverridePayload,
   CharacterRecord,
   CharacterStateSnapshot,
   LocationNode,
@@ -40,6 +44,9 @@ export interface CampaignCharacterStateTabProps {
   onOverridePhysicalState?: (
     payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
+  onOverrideObjective?: (
+    payload: CharacterObjectiveOverridePayload
+  ) => Promise<void> | void;
   characterNameMap: Record<string, string>;
   personaSnapshot?: PersonaRecord | null;
   activeBranchTurns?: readonly TurnNodeRecord[];
@@ -59,6 +66,7 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
   isMutatingLocked = false,
   onRelocateCharacter,
   onOverridePhysicalState,
+  onOverrideObjective,
   characterNameMap,
   personaSnapshot = null,
   activeBranchTurns = [],
@@ -68,6 +76,14 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
 }) => {
   const [targetLocId, setTargetLocId] = useState(state.current_location_id);
   const [isRelocating, setIsRelocating] = useState(false);
+  const [isEditingObjective, setIsEditingObjective] = useState(false);
+  const [objSummaryDraft, setObjSummaryDraft] = useState(
+    state.arc_objective?.summary ?? ""
+  );
+  const [objDeadlineDraft, setObjDeadlineDraft] = useState(
+    state.arc_objective?.deadline_cue ?? ""
+  );
+  const [isSavingObjective, setIsSavingObjective] = useState(false);
   const [expandedBondTargets, setExpandedBondTargets] = useState<Set<string>>(
     () => new Set(initialExpandedBondTargets ?? [])
   );
@@ -75,6 +91,12 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
   useEffect(() => {
     setTargetLocId(state.current_location_id);
   }, [character.id, state.current_location_id]);
+
+  useEffect(() => {
+    setIsEditingObjective(false);
+    setObjSummaryDraft(state.arc_objective?.summary ?? "");
+    setObjDeadlineDraft(state.arc_objective?.deadline_cue ?? "");
+  }, [character.id, state.turn_id, state.arc_objective?.summary, state.arc_objective?.deadline_cue]);
 
   useEffect(() => {
     setExpandedBondTargets(new Set(initialExpandedBondTargets ?? []));
@@ -524,6 +546,166 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
           </div>
         </div>
       )}
+
+      {/* Multi-Scene Arc Objective */}
+      <div
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: 8,
+          padding: 12,
+        }}
+      >
+        <div
+          className="sidebar-label"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 6,
+            marginBottom: 6,
+          }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Compass size={13} color="var(--accent-amber)" />
+            Arc Objective
+          </span>
+          {onOverrideObjective && !isMutatingLocked && !isEditingObjective && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => {
+                  setObjSummaryDraft(state.arc_objective?.summary ?? "");
+                  setObjDeadlineDraft(state.arc_objective?.deadline_cue ?? "");
+                  setIsEditingObjective(true);
+                }}
+                title="Override Arc Objective (GM Mode)"
+              >
+                <Edit3 size={11} />
+                {state.arc_objective ? "Edit" : "Set"}
+              </button>
+              {state.arc_objective && (
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  disabled={isSavingObjective}
+                  style={{
+                    color: "var(--accent-rose)",
+                    borderColor: "rgba(244, 63, 94, 0.35)",
+                  }}
+                  onClick={async () => {
+                    setIsSavingObjective(true);
+                    try {
+                      await onOverrideObjective({ clear: true });
+                    } finally {
+                      setIsSavingObjective(false);
+                    }
+                  }}
+                  title="Clear Arc Objective (GM Mode)"
+                >
+                  <Trash2 size={11} />
+                  Clear
+                </button>
+              )}
+            </span>
+          )}
+        </div>
+
+        {isEditingObjective && onOverrideObjective ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <input
+              type="text"
+              className="field-input"
+              maxLength={240}
+              placeholder="Multi-scene arc goal (e.g. Reach Sector 8 through the Sluice)..."
+              value={objSummaryDraft}
+              onChange={(e) => setObjSummaryDraft(e.target.value)}
+            />
+            <input
+              type="text"
+              className="field-input"
+              maxLength={80}
+              placeholder="Optional deadline / condition (e.g. at daybreak)..."
+              value={objDeadlineDraft}
+              onChange={(e) => setObjDeadlineDraft(e.target.value)}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                disabled={isSavingObjective}
+                onClick={() => setIsEditingObjective(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-xs"
+                disabled={isSavingObjective || !objSummaryDraft.trim()}
+                onClick={async () => {
+                  if (!objSummaryDraft.trim()) return;
+                  setIsSavingObjective(true);
+                  try {
+                    await onOverrideObjective({
+                      summary: objSummaryDraft.trim(),
+                      deadline_cue: objDeadlineDraft.trim() || null,
+                      clear: false,
+                    });
+                    setIsEditingObjective(false);
+                  } finally {
+                    setIsSavingObjective(false);
+                  }
+                }}
+              >
+                {isSavingObjective ? "Saving..." : "Save Objective"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              fontSize: "0.82rem",
+              lineHeight: 1.5,
+              color: "var(--text-primary)",
+              background: "var(--bg-panel)",
+              padding: "8px 12px",
+              borderRadius: 6,
+              border: "1px solid var(--border-subtle)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            {state.arc_objective ? (
+              <>
+                <span>{state.arc_objective.summary}</span>
+                {state.arc_objective.deadline_cue && (
+                  <span
+                    className="badge"
+                    style={{
+                      alignSelf: "flex-start",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      fontSize: "0.7rem",
+                      borderColor: "rgba(245, 158, 11, 0.4)",
+                      color: "var(--accent-amber)",
+                    }}
+                  >
+                    <Clock size={10} />
+                    {state.arc_objective.deadline_cue}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
+                No active arc objective
+              </span>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Active Scene Want */}
       <div

@@ -716,6 +716,8 @@ def _format_character_detail(
         )
         if phys_str:
             lines.append(f"  Physical State: {phys_str}")
+        if state.arc_objective is not None:
+            lines.append(f"  Arc Objective: {state.arc_objective.format_prompt_text()}")
     if equipped:
         lines.append(f"  Equipped: {', '.join(equipped)}")
     if inventory:
